@@ -1,0 +1,15 @@
+﻿{
+  "python.defaultInterpreterPath": "C:\\Users\\cnmbb\\miniconda3\\envs\\lightrag\\python.exe",
+  "python.terminal.activateEnvironment": true,
+  "python.analysis.extraPaths": ["${workspaceFolder}/backend", "${workspaceFolder}/scripts"],
+  "python.envFile": "${workspaceFolder}/.env",
+  "files.exclude": {
+    "**/__pycache__": true,
+    "workspace/pdfs": true
+  },
+  "search.exclude": {
+    "frontend/node_modules": true,
+    "workspace": true
+  },
+  "[python]": { "editor.formatOnSave": false }
+}
