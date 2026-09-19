@@ -6,83 +6,84 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
- * LightRAG Local palette: slate + emerald, developer-tool coded.
- * Chosen via the ui-ux-pro-max "Developer Tool / IDE" color match
- * (slate base, emerald accent -- "code dark + run green") adapted with a
- * matching light theme, since the tool's own dark-only recommendation
- * doesn't cover the light mode this app requires.
+ * LightRAG Local palette: "amber terminal" -- warm near-black/cream with a
+ * single amber accent, chosen to read as a deliberate technical tool rather
+ * than the slate+emerald or indigo+violet combinations that have become the
+ * default look of AI-generated chat UIs. Status semantics (StatusDot,
+ * latency badges) intentionally keep conventional green/amber/red, which is
+ * a separate concern from this brand palette.
  */
 :root {
   color-scheme: light;
 
-  --background: #f8fafc;
-  --foreground: #0f172a;
-  --card: #ffffff;
-  --card-foreground: #0f172a;
-  --popover: #ffffff;
-  --popover-foreground: #0f172a;
-  --primary: #059669;
-  --primary-foreground: #ffffff;
-  --secondary: #f1f5f9;
-  --secondary-foreground: #0f172a;
-  --muted: #f1f5f9;
-  --muted-foreground: #64748b;
-  --accent: #ecfdf5;
-  --accent-foreground: #065f46;
+  --background: #f7f1e3;
+  --foreground: #211a0f;
+  --card: #fffcf5;
+  --card-foreground: #211a0f;
+  --popover: #fffcf5;
+  --popover-foreground: #211a0f;
+  --primary: #b4650f;
+  --primary-foreground: #fffbef;
+  --secondary: #efe4cb;
+  --secondary-foreground: #211a0f;
+  --muted: #efe4cb;
+  --muted-foreground: #7c6e52;
+  --accent: #fbefd3;
+  --accent-foreground: #7a4108;
   --destructive: #dc2626;
-  --border: #e2e8f0;
-  --input: #e2e8f0;
-  --ring: #10b981;
-  --chart-1: #059669;
-  --chart-2: #0891b2;
-  --chart-3: #64748b;
-  --chart-4: #f59e0b;
+  --border: #e3d6b4;
+  --input: #e3d6b4;
+  --ring: #c2790f;
+  --chart-1: #b4650f;
+  --chart-2: #7a4108;
+  --chart-3: #7c6e52;
+  --chart-4: #d97706;
   --chart-5: #dc2626;
   --radius: 0.75rem;
-  --sidebar: #ffffff;
-  --sidebar-foreground: #0f172a;
-  --sidebar-primary: #059669;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #f1f5f9;
-  --sidebar-accent-foreground: #0f172a;
-  --sidebar-border: #e2e8f0;
-  --sidebar-ring: #10b981;
+  --sidebar: #fffcf5;
+  --sidebar-foreground: #211a0f;
+  --sidebar-primary: #b4650f;
+  --sidebar-primary-foreground: #fffbef;
+  --sidebar-accent: #efe4cb;
+  --sidebar-accent-foreground: #211a0f;
+  --sidebar-border: #e3d6b4;
+  --sidebar-ring: #c2790f;
 }
 
 .dark {
   color-scheme: dark;
 
-  --background: #0b1120;
-  --foreground: #f1f5f9;
-  --card: #111827;
-  --card-foreground: #f1f5f9;
-  --popover: #111827;
-  --popover-foreground: #f1f5f9;
-  --primary: #10b981;
-  --primary-foreground: #052e1f;
-  --secondary: #1e293b;
-  --secondary-foreground: #f1f5f9;
-  --muted: #1e293b;
-  --muted-foreground: #94a3b8;
-  --accent: #132a22;
-  --accent-foreground: #6ee7b7;
+  --background: #0d0b08;
+  --foreground: #f2ead8;
+  --card: #17140f;
+  --card-foreground: #f2ead8;
+  --popover: #17140f;
+  --popover-foreground: #f2ead8;
+  --primary: #f0a93b;
+  --primary-foreground: #1a1207;
+  --secondary: #211c14;
+  --secondary-foreground: #f2ead8;
+  --muted: #211c14;
+  --muted-foreground: #a89a7c;
+  --accent: #2b2013;
+  --accent-foreground: #f0c179;
   --destructive: #ef4444;
-  --border: rgba(255, 255, 255, 0.08);
-  --input: rgba(255, 255, 255, 0.12);
-  --ring: #10b981;
-  --chart-1: #34d399;
-  --chart-2: #22d3ee;
-  --chart-3: #94a3b8;
+  --border: rgba(242, 234, 216, 0.08);
+  --input: rgba(242, 234, 216, 0.12);
+  --ring: #f0a93b;
+  --chart-1: #f0a93b;
+  --chart-2: #d97706;
+  --chart-3: #a89a7c;
   --chart-4: #fbbf24;
   --chart-5: #f87171;
-  --sidebar: #0f172a;
-  --sidebar-foreground: #f1f5f9;
-  --sidebar-primary: #10b981;
-  --sidebar-primary-foreground: #052e1f;
-  --sidebar-accent: #1e293b;
-  --sidebar-accent-foreground: #f1f5f9;
-  --sidebar-border: rgba(255, 255, 255, 0.08);
-  --sidebar-ring: #10b981;
+  --sidebar: #151109;
+  --sidebar-foreground: #f2ead8;
+  --sidebar-primary: #f0a93b;
+  --sidebar-primary-foreground: #1a1207;
+  --sidebar-accent: #211c14;
+  --sidebar-accent-foreground: #f2ead8;
+  --sidebar-border: rgba(242, 234, 216, 0.08);
+  --sidebar-ring: #f0a93b;
 }
 
 html,
@@ -97,7 +98,7 @@ body {
 }
 
 ::selection {
-  background-color: rgba(16, 185, 129, 0.3);
+  background-color: rgba(240, 169, 59, 0.3);
 }
 
 /* Slim, unobtrusive scrollbars that match the active theme. */
