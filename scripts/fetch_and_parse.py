@@ -1,9 +1,15 @@
-"""Download recent cs.LG papers from arXiv and build workspace/corpus.txt.
+"""Download recent ML papers from arXiv and build workspace/corpus.txt.
+
+The default query is topic-focused rather than a raw slice of the newest
+submissions: LightRAG's `global` and `hybrid` modes only differ from `naive`
+when documents share entities and relations, so a corpus of mutually related
+papers is what makes the retrieval-mode benchmark meaningful.
 
 References/Bibliography sections are stripped to conserve the local LLM's
 context budget during graph extraction.
 
-Usage:  python scripts/fetch_and_parse.py [--limit 30]
+Usage:
+    python scripts/fetch_and_parse.py [--limit 30] [--query "..."]
 """
 
 from __future__ import annotations
@@ -24,6 +30,12 @@ PDF_DIR = WORKSPACE / "pdfs"
 CORPUS_PATH = WORKSPACE / "corpus.txt"
 
 DOC_DELIMITER = "===== PAPER: {arxiv_id} ====="
+
+DATE_RANGE = "submittedDate:[202401010000 TO 202612312359]"
+DEFAULT_QUERY = (
+    '(cat:cs.LG OR cat:cs.CL OR cat:cs.IR) AND '
+    'abs:"retrieval-augmented generation"'
+)
 
 # arXiv asks API clients to identify themselves.
 USER_AGENT = "lightrag-local/1.0 (research reproduction; contact: local user)"
@@ -51,12 +63,14 @@ def short_id(result: arxiv.Result) -> str:
     return result.entry_id.rsplit("/", 1)[-1]
 
 
-def search_papers(limit: int) -> list[arxiv.Result]:
-    """Newest cs.LG submissions, filtered to 2024-2026."""
+def search_papers(limit: int, query: str) -> list[arxiv.Result]:
+    """Newest submissions matching `query`, filtered to 2024-2026."""
     client = arxiv.Client(page_size=100, delay_seconds=3.0, num_retries=5)
+    full_query = f"{query} AND {DATE_RANGE}"
+    log.info("query: %s", full_query)
     # Over-fetch so the date filter can still yield `limit` papers.
     search = arxiv.Search(
-        query="cat:cs.LG AND submittedDate:[202401010000 TO 202612312359]",
+        query=full_query,
         max_results=limit * 3,
         sort_by=arxiv.SortCriterion.SubmittedDate,
         sort_order=arxiv.SortOrder.Descending,
@@ -136,12 +150,17 @@ def clean(text: str) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--limit", type=int, default=30, help="number of papers")
+    parser.add_argument(
+        "--query",
+        default=DEFAULT_QUERY,
+        help="arXiv search query; the 2024-2026 date filter is always appended",
+    )
     args = parser.parse_args()
 
     PDF_DIR.mkdir(parents=True, exist_ok=True)
 
-    log.info("searching arXiv cs.LG for %d papers (2024-2026)", args.limit)
-    results = search_papers(args.limit)
+    log.info("searching arXiv for %d papers (2024-2026)", args.limit)
+    results = search_papers(args.limit, args.query)
     log.info("search returned %d papers", len(results))
 
     blocks: list[str] = []
