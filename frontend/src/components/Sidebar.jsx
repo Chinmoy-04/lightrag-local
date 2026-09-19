@@ -1,6 +1,8 @@
+import { AlertTriangle, CircleCheck, Database, Loader2 } from 'lucide-react'
 import ModeSelector from './ModeSelector'
 import StatusDot from './StatusDot'
-import { AlertIcon, CheckIcon, DatabaseIcon, Spinner } from './Icons'
+import SwitchButton from './kokonutui/switch-button'
+import { Button } from './ui/button'
 
 function formatChars(chars) {
   if (!chars) return '0'
@@ -24,44 +26,45 @@ export default function Sidebar({
   const statusLabel = healthError ? 'Backend unreachable' : ready ? 'Ready' : 'Initializing'
 
   return (
-    <aside className="flex w-full shrink-0 flex-col gap-6 border-b border-slate-800/80 bg-slate-950/60 p-5 md:h-screen md:w-80 md:border-b-0 md:border-r md:overflow-y-auto">
+    <aside className="flex w-full shrink-0 flex-col gap-6 border-b border-sidebar-border bg-sidebar p-5 md:h-screen md:w-80 md:border-b-0 md:border-r md:overflow-y-auto">
       {/* Brand */}
-      <div>
+      <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-violet-500 to-indigo-600 text-sm font-bold text-white shadow-lg shadow-violet-950/40">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-sm font-bold text-primary-foreground shadow-sm">
             LR
           </div>
           <div>
-            <h1 className="text-sm font-semibold text-white">LightRAG Local</h1>
-            <p className="text-[11px] text-slate-500">arXiv:2410.05779 · fully offline</p>
+            <h1 className="text-sm font-semibold text-sidebar-foreground">LightRAG Local</h1>
+            <p className="text-[11px] text-muted-foreground">arXiv:2410.05779 · fully offline</p>
           </div>
         </div>
+        <SwitchButton size="sm" showLabel={false} className="shrink-0 px-2.5" aria-label="Toggle theme" />
       </div>
 
       {/* Status card */}
-      <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-3.5">
+      <div className="rounded-xl border border-border bg-card p-3.5">
         <div className="flex items-center gap-2">
           <StatusDot variant={statusVariant} pulse={!ready && !healthError} />
-          <span className="text-sm font-medium text-slate-200">{statusLabel}</span>
+          <span className="text-sm font-medium text-card-foreground">{statusLabel}</span>
         </div>
         <dl className="mt-3 space-y-1.5 text-xs">
           <div className="flex items-center justify-between">
-            <dt className="text-slate-500">Query LLM</dt>
-            <dd className="font-mono text-slate-300">{health?.llm_model_query ?? '—'}</dd>
+            <dt className="text-muted-foreground">Query LLM</dt>
+            <dd className="font-mono text-card-foreground">{health?.llm_model_query ?? '—'}</dd>
           </div>
           {health?.llm_model_extract && health.llm_model_extract !== health.llm_model_query && (
             <div className="flex items-center justify-between">
-              <dt className="text-slate-500">Extract LLM</dt>
-              <dd className="font-mono text-slate-300">{health.llm_model_extract}</dd>
+              <dt className="text-muted-foreground">Extract LLM</dt>
+              <dd className="font-mono text-card-foreground">{health.llm_model_extract}</dd>
             </div>
           )}
           <div className="flex items-center justify-between">
-            <dt className="text-slate-500">Embeddings</dt>
-            <dd className="font-mono text-slate-300">{health?.embedding_model ?? '—'}</dd>
+            <dt className="text-muted-foreground">Embeddings</dt>
+            <dd className="font-mono text-card-foreground">{health?.embedding_model ?? '—'}</dd>
           </div>
           <div className="flex items-center justify-between">
-            <dt className="text-slate-500">Corpus</dt>
-            <dd className={health?.corpus_present ? 'text-emerald-400' : 'text-amber-400'}>
+            <dt className="text-muted-foreground">Corpus</dt>
+            <dd className={health?.corpus_present ? 'text-primary' : 'text-amber-600 dark:text-amber-400'}>
               {health?.corpus_present ? 'loaded' : 'missing'}
             </dd>
           </div>
@@ -73,31 +76,30 @@ export default function Sidebar({
 
       {/* Index control */}
       <div>
-        <span className="text-xs font-medium uppercase tracking-wider text-slate-400">
+        <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
           Knowledge graph
         </span>
-        <button
+        <Button
           type="button"
           onClick={onIndex}
           disabled={isIndexing || !health?.corpus_present}
-          className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg bg-slate-100 px-3 py-2.5
-                     text-sm font-semibold text-slate-900 transition-colors hover:bg-white
-                     disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
+          size="lg"
+          className="mt-2 w-full gap-2"
         >
-          {isIndexing ? <Spinner className="h-4 w-4" /> : <DatabaseIcon className="h-4 w-4" />}
+          {isIndexing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Database className="h-4 w-4" />}
           {isIndexing ? 'Building graph…' : 'Build knowledge graph'}
-        </button>
+        </Button>
 
         {isIndexing && (
-          <p className="mt-2 text-xs leading-relaxed text-slate-500">
+          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
             Entity extraction runs one chunk at a time on local hardware — this can take
             several hours for the full corpus. Progress is in the backend terminal log.
           </p>
         )}
 
         {!isIndexing && indexResult && (
-          <div className="mt-2 flex items-start gap-2 rounded-lg bg-emerald-500/10 p-2.5 text-xs text-emerald-300 ring-1 ring-emerald-500/20">
-            <CheckIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <div className="mt-2 flex items-start gap-2 rounded-lg bg-primary/10 p-2.5 text-xs text-primary ring-1 ring-inset ring-primary/20">
+            <CircleCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <span>
               Indexed {indexResult.documents} document{indexResult.documents === 1 ? '' : 's'} (
               {formatChars(indexResult.characters)} chars) in {indexResult.latency_seconds}s.
@@ -106,14 +108,14 @@ export default function Sidebar({
         )}
 
         {!isIndexing && indexError && (
-          <div className="mt-2 flex items-start gap-2 rounded-lg bg-rose-500/10 p-2.5 text-xs text-rose-300 ring-1 ring-rose-500/20">
-            <AlertIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <div className="mt-2 flex items-start gap-2 rounded-lg bg-destructive/10 p-2.5 text-xs text-destructive ring-1 ring-inset ring-destructive/20">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <span>{indexError}</span>
           </div>
         )}
       </div>
 
-      <div className="mt-auto text-[11px] leading-relaxed text-slate-600">
+      <div className="mt-auto text-[11px] leading-relaxed text-muted-foreground">
         Indexed corpus: 30 recent papers on retrieval-augmented generation, so shared
         entities give global/hybrid mode something real to traverse.
       </div>

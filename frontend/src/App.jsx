@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { ReactLenis, useLenis } from 'lenis/react'
+import { Sparkles } from 'lucide-react'
 import { getHealth, postIndex, postQuery } from './api'
 import Sidebar from './components/Sidebar'
 import Composer from './components/Composer'
 import ChatMessage, { ThinkingBubble } from './components/ChatMessage'
-import { SparkleIcon } from './components/Icons'
 
 const EXAMPLE_PROMPTS = [
   'How do these papers combine knowledge graphs with retrieval-augmented generation?',
@@ -33,6 +34,7 @@ export default function App() {
   const [indexError, setIndexError] = useState(null)
 
   const scrollAnchorRef = useRef(null)
+  const lenis = useLenis()
 
   const refreshHealth = useCallback(async () => {
     try {
@@ -51,8 +53,17 @@ export default function App() {
   }, [refreshHealth])
 
   useEffect(() => {
-    scrollAnchorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
-  }, [messages, isQuerying])
+    const anchor = scrollAnchorRef.current
+    if (!anchor) return
+    // Route auto-scroll through Lenis so it shares the same smoothing as
+    // manual scrolling, falling back to native smooth-scroll before the
+    // Lenis instance mounts.
+    if (lenis) {
+      lenis.scrollTo(anchor, { duration: 0.6 })
+    } else {
+      anchor.scrollIntoView({ behavior: 'smooth', block: 'end' })
+    }
+  }, [messages, isQuerying, lenis])
 
   async function handleIndex() {
     setIsIndexing(true)
@@ -100,7 +111,7 @@ export default function App() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-slate-950 text-slate-100 md:flex-row">
+    <div className="flex min-h-screen flex-col bg-background text-foreground md:flex-row">
       <Sidebar
         health={health}
         healthError={healthError}
@@ -113,42 +124,44 @@ export default function App() {
       />
 
       <main className="flex min-h-screen flex-1 flex-col">
-        <div className="flex-1 overflow-y-auto px-4 py-6 md:px-8">
-          {messages.length === 0 ? (
-            <div className="mx-auto flex h-full max-w-xl flex-col items-center justify-center text-center">
-              <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-violet-500/10 text-violet-400 ring-1 ring-inset ring-violet-500/20">
-                <SparkleIcon className="h-5 w-5" />
+        <ReactLenis root="asChild" options={{ autoRaf: true }}>
+          <div className="flex-1 overflow-y-auto px-4 py-6 md:px-8">
+            {messages.length === 0 ? (
+              <div className="mx-auto flex h-full max-w-xl flex-col items-center justify-center text-center">
+                <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-inset ring-primary/20">
+                  <Sparkles className="h-5 w-5" />
+                </div>
+                <h2 className="text-base font-semibold text-foreground">
+                  Ask about the indexed RAG papers
+                </h2>
+                <p className="mt-1.5 text-sm text-muted-foreground">
+                  Pick a retrieval mode on the left, then ask a question. Try one below.
+                </p>
+                <div className="mt-5 flex w-full flex-col gap-2">
+                  {EXAMPLE_PROMPTS.map((prompt) => (
+                    <button
+                      key={prompt}
+                      type="button"
+                      onClick={() => sendPrompt(prompt)}
+                      className="rounded-xl border border-border bg-card px-4 py-2.5 text-left
+                                 text-sm text-card-foreground transition-colors hover:border-primary/40 hover:bg-muted"
+                    >
+                      {prompt}
+                    </button>
+                  ))}
+                </div>
               </div>
-              <h2 className="text-base font-semibold text-slate-100">
-                Ask about the indexed RAG papers
-              </h2>
-              <p className="mt-1.5 text-sm text-slate-500">
-                Pick a retrieval mode on the left, then ask a question. Try one below.
-              </p>
-              <div className="mt-5 flex w-full flex-col gap-2">
-                {EXAMPLE_PROMPTS.map((prompt) => (
-                  <button
-                    key={prompt}
-                    type="button"
-                    onClick={() => sendPrompt(prompt)}
-                    className="rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-2.5 text-left
-                               text-sm text-slate-300 transition-colors hover:border-violet-500/40 hover:bg-slate-900"
-                  >
-                    {prompt}
-                  </button>
+            ) : (
+              <div className="mx-auto flex max-w-2xl flex-col gap-3">
+                {messages.map((message) => (
+                  <ChatMessage key={message.id} message={message} />
                 ))}
+                {isQuerying && <ThinkingBubble mode={mode} />}
+                <div ref={scrollAnchorRef} />
               </div>
-            </div>
-          ) : (
-            <div className="mx-auto flex max-w-2xl flex-col gap-3">
-              {messages.map((message) => (
-                <ChatMessage key={message.id} message={message} />
-              ))}
-              {isQuerying && <ThinkingBubble mode={mode} />}
-              <div ref={scrollAnchorRef} />
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        </ReactLenis>
 
         <div className="mx-auto w-full max-w-2xl">
           <Composer

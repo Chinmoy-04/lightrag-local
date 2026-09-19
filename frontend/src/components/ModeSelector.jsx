@@ -8,11 +8,9 @@ const MODES = [
 export default function ModeSelector({ value, onChange, disabled }) {
   return (
     <div>
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-medium uppercase tracking-wider text-slate-400">
-          Retrieval mode
-        </span>
-      </div>
+      <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        Retrieval mode
+      </span>
       <div className="mt-2 grid grid-cols-2 gap-1.5">
         {MODES.map((mode) => {
           const active = value === mode.id
@@ -27,8 +25,8 @@ export default function ModeSelector({ value, onChange, disabled }) {
                 'rounded-lg px-2.5 py-2 text-sm font-medium transition-all duration-150',
                 'disabled:cursor-not-allowed disabled:opacity-40',
                 active
-                  ? 'bg-violet-500 text-white shadow-[0_0_0_1px_rgba(139,92,246,0.4),0_4px_12px_-2px_rgba(139,92,246,0.5)]'
-                  : 'bg-slate-800/60 text-slate-300 ring-1 ring-inset ring-slate-700/60 hover:bg-slate-800 hover:text-white',
+                  ? 'bg-primary text-primary-foreground shadow-sm ring-1 ring-primary/40'
+                  : 'bg-secondary text-secondary-foreground ring-1 ring-inset ring-border hover:bg-muted',
               ].join(' ')}
             >
               {mode.label}
@@ -36,7 +34,7 @@ export default function ModeSelector({ value, onChange, disabled }) {
           )
         })}
       </div>
-      <p className="mt-2 text-xs leading-relaxed text-slate-500">
+      <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
         {MODES.find((mode) => mode.id === value)?.hint}
       </p>
     </div>
