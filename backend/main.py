@@ -23,9 +23,23 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from lightrag import LightRAG, QueryParam
+from lightrag import LightRAG, QueryParam, RoleLLMConfig
 from lightrag.llm.ollama import ollama_embed, ollama_model_complete
 from lightrag.utils import EmbeddingFunc, setup_logger
+
+# `_ollama_model_if_cache` is a private helper (leading underscore): it is the
+# same function `ollama_model_complete` calls internally, just without the
+# step that hardcodes the model name to `global_config["llm_model_name"]`.
+# LightRAG has no public hook to give one role (e.g. "extract") a different
+# Ollama model than the rest when using the built-in `ollama_model_complete`
+# binding, so `make_extract_role_func` below copies that ~10-line body and
+# swaps the model lookup for a closure. Guarded with a try/except so a future
+# lightrag-hku release that removes/renames it degrades to "no per-role
+# override" instead of crashing the server.
+try:
+    from lightrag.llm.ollama import _ollama_model_if_cache
+except ImportError:  # pragma: no cover - internal API drift in lightrag-hku
+    _ollama_model_if_cache = None
 
 # ------------------------------------------------------------------ config
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -34,6 +48,18 @@ CORPUS_PATH = WORKING_DIR / "corpus.txt"
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
 LLM_MODEL = os.getenv("LLM_MODEL", "llama3.1:8b")
+# Optional per-role override for the "extract" role (entity/relation
+# extraction, which runs hundreds of times per corpus vs. once per query).
+# Unset by default: llama3.2:3b was measured 2.3x faster at raw generation
+# (scripts/bench_ollama.py) but produced malformed structured output --
+# LightRAG's parser logged repeated "found 6/4 fields" / "mis-prefixed
+# relation" recoveries -- and a real /index run against 4 chunks took 505s
+# vs. 134s for 3 chunks on llama3.1:8b: the smaller model's failure-recovery
+# overhead outweighed its speed. Matches LightRAG's own guidance that
+# extraction wants >=32B-class models. Kept configurable via env var for
+# anyone who wants to re-test with a different small model or a longer
+# corpus, but the measured result on this corpus says stay on LLM_MODEL.
+EXTRACT_MODEL = os.getenv("EXTRACT_LLM_MODEL", "") or LLM_MODEL
 EMBED_MODEL = os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
 EMBED_DIM = int(os.getenv("EMBEDDING_DIM", "768"))  # nomic-embed-text
 NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "8192"))
@@ -53,13 +79,68 @@ log = logging.getLogger("backend")
 rag: LightRAG | None = None
 
 
+def make_extract_role_func(model_name: str):
+    """Per-role LLM func for the "extract" role, pinned to `model_name`.
+
+    Mirrors `ollama_model_complete` exactly, except the model comes from this
+    closure instead of `kwargs["hashing_kv"].global_config["llm_model_name"]`.
+    Host/options/timeout still flow through from `llm_model_kwargs` as usual;
+    only the model tag differs.
+    """
+
+    async def _extract_complete(
+        prompt,
+        system_prompt=None,
+        history_messages=[],
+        enable_cot: bool = False,
+        keyword_extraction=False,
+        entity_extraction=False,
+        token_tracker=None,
+        **kwargs,
+    ):
+        return await _ollama_model_if_cache(
+            model_name,
+            prompt,
+            system_prompt=system_prompt,
+            history_messages=history_messages,
+            enable_cot=enable_cot,
+            keyword_extraction=keyword_extraction,
+            entity_extraction=entity_extraction,
+            token_tracker=token_tracker,
+            **kwargs,
+        )
+
+    return _extract_complete
+
+
 # ------------------------------------------------------------- construction
 async def build_rag() -> LightRAG:
     WORKING_DIR.mkdir(parents=True, exist_ok=True)
     log.info("initializing LightRAG in %s", WORKING_DIR)
+
+    role_llm_configs: dict[str, RoleLLMConfig] = {}
+    if EXTRACT_MODEL and EXTRACT_MODEL != LLM_MODEL:
+        if _ollama_model_if_cache is None:
+            log.warning(
+                "EXTRACT_LLM_MODEL=%s requested but lightrag.llm.ollama."
+                "_ollama_model_if_cache is unavailable in this lightrag-hku "
+                "version; extraction will fall back to %s.",
+                EXTRACT_MODEL,
+                LLM_MODEL,
+            )
+        else:
+            role_llm_configs["extract"] = RoleLLMConfig(
+                func=make_extract_role_func(EXTRACT_MODEL),
+                # Metadata only feeds LightRAG's own "Role LLM Configuration"
+                # startup log; it plays no part in dispatch (that's `func`).
+                metadata={"binding": "ollama", "model": EXTRACT_MODEL, "host": OLLAMA_HOST},
+            )
+
+    effective_extract_model = EXTRACT_MODEL if "extract" in role_llm_configs else LLM_MODEL
     log.info(
-        "llm=%s embed=%s(dim=%d) num_ctx=%d chunk=%d",
+        "llm(query/keyword)=%s llm(extract)=%s embed=%s(dim=%d) num_ctx=%d chunk=%d",
         LLM_MODEL,
+        effective_extract_model,
         EMBED_MODEL,
         EMBED_DIM,
         NUM_CTX,
@@ -69,6 +150,9 @@ async def build_rag() -> LightRAG:
     instance = LightRAG(
         working_dir=str(WORKING_DIR),
         # --- generation (Ollama) ---
+        # Answers queries and does query-time keyword extraction. Indexing's
+        # entity/relation extraction uses EXTRACT_MODEL instead, via
+        # role_llm_configs below (falls back to this model if unset).
         llm_model_func=ollama_model_complete,
         llm_model_name=LLM_MODEL,
         llm_model_kwargs={
@@ -76,6 +160,7 @@ async def build_rag() -> LightRAG:
             "options": {"num_ctx": NUM_CTX, "temperature": 0.0},
             "timeout": int(os.getenv("TIMEOUT", "600")),
         },
+        role_llm_configs=role_llm_configs or None,
         llm_model_max_async=1,  # one generation at a time: 8GB ceiling
         max_parallel_insert=1,  # one document at a time
         summary_max_tokens=600,  # must exceed LightRAG's summary_length_recommended (600)
@@ -182,9 +267,14 @@ def split_corpus(text: str) -> tuple[list[str], list[str]]:
 # ------------------------------------------------------------------- routes
 @app.get("/health")
 async def health() -> dict:
+    # role_llm_kwargs only lists a role once its wrapper has been built, i.e.
+    # after build_rag() succeeded, so this reflects whether the extract-role
+    # override is actually active rather than just what was requested.
+    extract_active = rag is not None and "extract" in rag.role_llm_funcs
     return {
         "status": "ok" if rag is not None else "initializing",
-        "llm_model": LLM_MODEL,
+        "llm_model_query": LLM_MODEL,
+        "llm_model_extract": EXTRACT_MODEL if extract_active else LLM_MODEL,
         "embedding_model": EMBED_MODEL,
         "corpus_present": CORPUS_PATH.exists(),
     }
