@@ -1,122 +1,165 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import './App.css'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { getHealth, postIndex, postQuery } from './api'
+import Sidebar from './components/Sidebar'
+import Composer from './components/Composer'
+import ChatMessage, { ThinkingBubble } from './components/ChatMessage'
+import { SparkleIcon } from './components/Icons'
 
-function App() {
-  const [count, setCount] = useState(0)
+const EXAMPLE_PROMPTS = [
+  'How do these papers combine knowledge graphs with retrieval-augmented generation?',
+  'What approaches are used for multi-hop reasoning in RAG systems?',
+  'What privacy or safety risks do these papers raise about RAG?',
+]
 
-  return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+const HEALTH_POLL_MS = 20_000
 
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+function newId() {
+  return typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
-export default App
+export default function App() {
+  const [health, setHealth] = useState(null)
+  const [healthError, setHealthError] = useState(null)
+
+  const [mode, setMode] = useState('hybrid')
+  const [messages, setMessages] = useState([])
+  const [input, setInput] = useState('')
+  const [isQuerying, setIsQuerying] = useState(false)
+
+  const [isIndexing, setIsIndexing] = useState(false)
+  const [indexResult, setIndexResult] = useState(null)
+  const [indexError, setIndexError] = useState(null)
+
+  const scrollAnchorRef = useRef(null)
+
+  const refreshHealth = useCallback(async () => {
+    try {
+      const data = await getHealth()
+      setHealth(data)
+      setHealthError(null)
+    } catch (error) {
+      setHealthError(error.message)
+    }
+  }, [])
+
+  useEffect(() => {
+    refreshHealth()
+    const interval = setInterval(refreshHealth, HEALTH_POLL_MS)
+    return () => clearInterval(interval)
+  }, [refreshHealth])
+
+  useEffect(() => {
+    scrollAnchorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+  }, [messages, isQuerying])
+
+  async function handleIndex() {
+    setIsIndexing(true)
+    setIndexError(null)
+    setIndexResult(null)
+    try {
+      const result = await postIndex()
+      setIndexResult(result)
+    } catch (error) {
+      setIndexError(error.message)
+    } finally {
+      setIsIndexing(false)
+      refreshHealth()
+    }
+  }
+
+  async function sendPrompt(prompt) {
+    const trimmed = prompt.trim()
+    if (!trimmed || isQuerying) return
+
+    setMessages((prev) => [...prev, { id: newId(), role: 'user', content: trimmed }])
+    setInput('')
+    setIsQuerying(true)
+
+    try {
+      const result = await postQuery(trimmed, mode)
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: newId(),
+          role: 'assistant',
+          content: result.response,
+          latency: result.latency_seconds,
+          mode: result.mode,
+        },
+      ])
+    } catch (error) {
+      setMessages((prev) => [
+        ...prev,
+        { id: newId(), role: 'assistant', error: true, content: error.message },
+      ])
+    } finally {
+      setIsQuerying(false)
+    }
+  }
+
+  return (
+    <div className="flex min-h-screen flex-col bg-slate-950 text-slate-100 md:flex-row">
+      <Sidebar
+        health={health}
+        healthError={healthError}
+        mode={mode}
+        onModeChange={setMode}
+        isIndexing={isIndexing}
+        indexResult={indexResult}
+        indexError={indexError}
+        onIndex={handleIndex}
+      />
+
+      <main className="flex min-h-screen flex-1 flex-col">
+        <div className="flex-1 overflow-y-auto px-4 py-6 md:px-8">
+          {messages.length === 0 ? (
+            <div className="mx-auto flex h-full max-w-xl flex-col items-center justify-center text-center">
+              <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-violet-500/10 text-violet-400 ring-1 ring-inset ring-violet-500/20">
+                <SparkleIcon className="h-5 w-5" />
+              </div>
+              <h2 className="text-base font-semibold text-slate-100">
+                Ask about the indexed RAG papers
+              </h2>
+              <p className="mt-1.5 text-sm text-slate-500">
+                Pick a retrieval mode on the left, then ask a question. Try one below.
+              </p>
+              <div className="mt-5 flex w-full flex-col gap-2">
+                {EXAMPLE_PROMPTS.map((prompt) => (
+                  <button
+                    key={prompt}
+                    type="button"
+                    onClick={() => sendPrompt(prompt)}
+                    className="rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-2.5 text-left
+                               text-sm text-slate-300 transition-colors hover:border-violet-500/40 hover:bg-slate-900"
+                  >
+                    {prompt}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="mx-auto flex max-w-2xl flex-col gap-3">
+              {messages.map((message) => (
+                <ChatMessage key={message.id} message={message} />
+              ))}
+              {isQuerying && <ThinkingBubble mode={mode} />}
+              <div ref={scrollAnchorRef} />
+            </div>
+          )}
+        </div>
+
+        <div className="mx-auto w-full max-w-2xl">
+          <Composer
+            value={input}
+            onChange={setInput}
+            onSubmit={() => sendPrompt(input)}
+            disabled={isQuerying}
+            placeholder={`Ask something · ${mode} mode`}
+          />
+        </div>
+      </main>
+    </div>
+  )
+}
