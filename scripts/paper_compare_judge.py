@@ -9,11 +9,7 @@ plus a simple overall ranking.
 Uses any OpenAI-compatible chat API (DeepSeek, Groq, SiliconFlow, Ollama, …).
 
 Examples:
-  # DeepSeek
-  $env:JUDGE_API_KEY = "sk-..."
-  $env:JUDGE_BASE_URL = "https://api.deepseek.com/v1"
-  $env:JUDGE_MODEL = "deepseek-chat"
-  python scripts/paper_compare_judge.py
+  
 
   # Groq
   $env:JUDGE_API_KEY = "gsk_..."

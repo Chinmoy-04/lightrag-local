@@ -1,11 +1,12 @@
-"""FastAPI bridge between LightRAG (Ollama-backed) and the React frontend.
+"""FastAPI bridge between LightRAG and the React frontend.
 
 Run:  uvicorn backend.main:app --host 127.0.0.1 --port 8000
 
 Hardware notes (RTX 5060 Laptop, 8GB VRAM):
-  * Generation and embedding both run in Ollama; this process never imports torch.
+  * Embeddings always run in Ollama; this process never imports torch.
+  * Query LLM defaults to Ollama; set LLM_PROVIDER=openai for DeepSeek/Groq/etc.
   * num_ctx is 8192 and MAX_TOTAL_TOKENS is 6000 (must stay below num_ctx - 2000).
-  * Concurrency is pinned to 1 so two generations never sit in VRAM together.
+  * Concurrency is pinned to 1 so two local generations never sit in VRAM together.
 """
 
 from __future__ import annotations
@@ -21,14 +22,18 @@ from functools import partial
 from pathlib import Path
 from typing import Literal
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from lightrag import LightRAG, QueryParam, RoleLLMConfig
 from lightrag.base import DocStatus
 from lightrag.llm.ollama import ollama_embed, ollama_model_complete
 from lightrag.utils import EmbeddingFunc, setup_logger
+
+load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
 # `_ollama_model_if_cache` is a private helper (leading underscore): it is the
 # same function `ollama_model_complete` calls internally, just without the
@@ -52,7 +57,26 @@ GRAPHML_PATH = WORKING_DIR / "graph_chunk_entity_relation.graphml"
 COMPARE_PATH = WORKING_DIR / "mode_comparison.json"
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
-LLM_MODEL = os.getenv("LLM_MODEL", "llama3.1:8b")
+# ollama = local query+keywords; openai = OpenAI-compatible chat API (DeepSeek, Groq, …)
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
+LLM_MODEL = os.getenv(
+    "LLM_MODEL",
+    "deepseek-chat" if LLM_PROVIDER == "openai" else "llama3.1:8b",
+)
+# OpenAI-compatible settings (also accept the JUDGE_* vars used by the compare script).
+OPENAI_API_KEY = (
+    os.getenv("OPENAI_API_KEY")
+    or os.getenv("LLM_BINDING_API_KEY")
+    or os.getenv("JUDGE_API_KEY")
+    or ""
+)
+OPENAI_BASE_URL = (
+    os.getenv("OPENAI_BASE_URL")
+    or os.getenv("LLM_BINDING_HOST")
+    or os.getenv("JUDGE_BASE_URL")
+    or "https://api.deepseek.com/v1"
+).rstrip("/")
+OPENAI_MAX_TOKENS = int(os.getenv("OPENAI_MAX_TOKENS", "2048"))
 # Optional per-role override for the "extract" role (entity/relation
 # extraction, which runs hundreds of times per corpus vs. once per query).
 # Unset by default: llama3.2:3b was measured 2.3x faster at raw generation
@@ -64,7 +88,10 @@ LLM_MODEL = os.getenv("LLM_MODEL", "llama3.1:8b")
 # extraction wants >=32B-class models. Kept configurable via env var for
 # anyone who wants to re-test with a different small model or a longer
 # corpus, but the measured result on this corpus says stay on LLM_MODEL.
-EXTRACT_MODEL = os.getenv("EXTRACT_LLM_MODEL", "") or LLM_MODEL
+# When query uses an OpenAI-compatible API, extract defaults to local Ollama
+# so we never re-pay cloud for indexing that already finished.
+_DEFAULT_EXTRACT = "llama3.1:8b" if LLM_PROVIDER == "openai" else LLM_MODEL
+EXTRACT_MODEL = os.getenv("EXTRACT_LLM_MODEL", "") or _DEFAULT_EXTRACT
 EMBED_MODEL = os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
 EMBED_DIM = int(os.getenv("EMBEDDING_DIM", "768"))  # nomic-embed-text
 NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "8192"))
@@ -131,54 +158,97 @@ async def build_rag() -> LightRAG:
     WORKING_DIR.mkdir(parents=True, exist_ok=True)
     log.info("initializing LightRAG in %s", WORKING_DIR)
 
+    use_openai = LLM_PROVIDER in {"openai", "deepseek", "groq"}
+    if use_openai and not OPENAI_API_KEY:
+        raise RuntimeError(
+            "LLM_PROVIDER=%s requires OPENAI_API_KEY / JUDGE_API_KEY in .env" % LLM_PROVIDER
+        )
+
+    # Keep entity extraction on Ollama whenever query uses a cloud chat API
+    # (or whenever EXTRACT_LLM_MODEL differs from LLM_MODEL).
     role_llm_configs: dict[str, RoleLLMConfig] = {}
-    if EXTRACT_MODEL and EXTRACT_MODEL != LLM_MODEL:
+    need_ollama_extract = use_openai or (EXTRACT_MODEL and EXTRACT_MODEL != LLM_MODEL)
+    if need_ollama_extract:
         if _ollama_model_if_cache is None:
             log.warning(
                 "EXTRACT_LLM_MODEL=%s requested but lightrag.llm.ollama."
                 "_ollama_model_if_cache is unavailable in this lightrag-hku "
-                "version; extraction will fall back to %s.",
+                "version; extraction will fall back to the query LLM.",
                 EXTRACT_MODEL,
-                LLM_MODEL,
             )
         else:
             role_llm_configs["extract"] = RoleLLMConfig(
                 func=make_extract_role_func(EXTRACT_MODEL),
+                kwargs={
+                    "host": OLLAMA_HOST,
+                    "options": {"num_ctx": NUM_CTX, "temperature": 0.0},
+                    "timeout": OLLAMA_TIMEOUT,
+                },
                 # Metadata only feeds LightRAG's own "Role LLM Configuration"
                 # startup log; it plays no part in dispatch (that's `func`).
                 metadata={"binding": "ollama", "model": EXTRACT_MODEL, "host": OLLAMA_HOST},
             )
 
     effective_extract_model = EXTRACT_MODEL if "extract" in role_llm_configs else LLM_MODEL
-    log.info(
-        "llm(query/keyword)=%s llm(extract)=%s embed=%s(dim=%d) num_ctx=%d chunk=%d "
-        "ollama_timeout=%s worker_timeout=%ds",
-        LLM_MODEL,
-        effective_extract_model,
-        EMBED_MODEL,
-        EMBED_DIM,
-        NUM_CTX,
-        CHUNK_TOKENS,
-        "unlimited" if OLLAMA_TIMEOUT == 0 else f"{OLLAMA_TIMEOUT}s",
-        LLM_WORKER_TIMEOUT,
-    )
 
-    instance = LightRAG(
-        working_dir=str(WORKING_DIR),
-        # --- generation (Ollama) ---
-        # Answers queries and does query-time keyword extraction. Indexing's
-        # entity/relation extraction uses EXTRACT_MODEL instead, via
-        # role_llm_configs below (falls back to this model if unset).
-        llm_model_func=ollama_model_complete,
-        llm_model_name=LLM_MODEL,
-        llm_model_kwargs={
+    if use_openai:
+        from lightrag.llm.openai import openai_complete
+
+        llm_model_func = openai_complete
+        llm_model_kwargs = {
+            "base_url": OPENAI_BASE_URL,
+            "api_key": OPENAI_API_KEY,
+            "max_tokens": OPENAI_MAX_TOKENS,
+            "temperature": 0.0,
+            "timeout": 180,
+        }
+        # Avoid serving cached local-8B answers for the same prompts.
+        enable_llm_cache = False
+        log.info(
+            "llm(query/keyword)=%s@%s llm(extract)=%s embed=%s(dim=%d) "
+            "max_tokens=%d chunk=%d worker_timeout=%ds cache=off",
+            LLM_MODEL,
+            OPENAI_BASE_URL,
+            effective_extract_model,
+            EMBED_MODEL,
+            EMBED_DIM,
+            OPENAI_MAX_TOKENS,
+            CHUNK_TOKENS,
+            LLM_WORKER_TIMEOUT,
+        )
+    else:
+        llm_model_func = ollama_model_complete
+        llm_model_kwargs = {
             "host": OLLAMA_HOST,
             "options": {"num_ctx": NUM_CTX, "temperature": 0.0},
             "timeout": OLLAMA_TIMEOUT,
-        },
+        }
+        enable_llm_cache = True
+        log.info(
+            "llm(query/keyword)=%s llm(extract)=%s embed=%s(dim=%d) num_ctx=%d chunk=%d "
+            "ollama_timeout=%s worker_timeout=%ds",
+            LLM_MODEL,
+            effective_extract_model,
+            EMBED_MODEL,
+            EMBED_DIM,
+            NUM_CTX,
+            CHUNK_TOKENS,
+            "unlimited" if OLLAMA_TIMEOUT == 0 else f"{OLLAMA_TIMEOUT}s",
+            LLM_WORKER_TIMEOUT,
+        )
+
+    instance = LightRAG(
+        working_dir=str(WORKING_DIR),
+        # --- generation ---
+        # Answers queries and does query-time keyword extraction. Indexing's
+        # entity/relation extraction uses EXTRACT_MODEL instead, via
+        # role_llm_configs below (falls back to this model if unset).
+        llm_model_func=llm_model_func,
+        llm_model_name=LLM_MODEL,
+        llm_model_kwargs=llm_model_kwargs,
         default_llm_timeout=LLM_WORKER_TIMEOUT,
         role_llm_configs=role_llm_configs or None,
-        llm_model_max_async=1,  # one generation at a time: 8GB ceiling
+        llm_model_max_async=1,  # one generation at a time: 8GB ceiling / rate limits
         max_parallel_insert=1,  # one document at a time
         summary_max_tokens=600,  # must exceed LightRAG's summary_length_recommended (600)
         # --- embeddings (Ollama). `.func` avoids double EmbeddingFunc wrapping ---
@@ -196,7 +266,7 @@ async def build_rag() -> LightRAG:
         # --- chunking ---
         chunk_token_size=CHUNK_TOKENS,
         chunk_overlap_token_size=64,
-        enable_llm_cache=True,
+        enable_llm_cache=enable_llm_cache,
         enable_llm_cache_for_entity_extract=True,
     )
 
@@ -315,6 +385,7 @@ async def health() -> dict:
     extract_active = rag is not None and "extract" in rag.role_llm_funcs
     return {
         "status": "ok" if rag is not None else "initializing",
+        "llm_provider": LLM_PROVIDER,
         "llm_model_query": LLM_MODEL,
         "llm_model_extract": EXTRACT_MODEL if extract_active else LLM_MODEL,
         "embedding_model": EMBED_MODEL,
@@ -509,7 +580,7 @@ async def get_graph(
 
 
 @app.get("/compare")
-async def get_compare() -> dict:
+async def get_compare() -> JSONResponse:
     """Serve the saved LightRAG mode-comparison run for the Compare dashboard.
 
     Produced offline by querying the same prompt across naive/local/global/hybrid
@@ -558,8 +629,10 @@ async def get_compare() -> dict:
         if fastest is None or p["latency_seconds"] < fastest["latency_seconds"]:
             fastest = p
 
-    return {
+    body = {
         "prompt": payload.get("prompt") or "",
+        "queried_at": payload.get("queried_at"),
+        "llm": payload.get("llm"),
         "num_questions": 1,
         "num_pipelines": len(pipelines),
         "num_ok": ok_count,
@@ -569,3 +642,7 @@ async def get_compare() -> dict:
         "paper_judge": payload.get("paper_judge"),
         "path": str(COMPARE_PATH),
     }
+    return JSONResponse(
+        content=body,
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate", "Pragma": "no-cache"},
+    )

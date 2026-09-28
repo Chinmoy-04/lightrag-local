@@ -98,8 +98,8 @@ export default function GraphViewer({ onClose }) {
   }, [data])
 
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col">
-      <header className="flex flex-wrap items-center gap-3 border-b border-border bg-card/80 px-4 py-3 backdrop-blur">
+    <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+      <header className="flex shrink-0 flex-wrap items-center gap-3 border-b border-border bg-card/80 px-4 py-3 backdrop-blur">
         <div className="flex items-center gap-2">
           <Network className="h-4 w-4 text-primary" />
           <h2 className="text-sm font-semibold text-foreground">Knowledge graph</h2>
@@ -214,7 +214,7 @@ export default function GraphViewer({ onClose }) {
             <div className="flex items-start justify-between gap-2">
               <div>
                 <p className="text-sm font-semibold text-card-foreground">{selected.label}</p>
-                <p className="mt-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">
+                <p className="mt-0.5 text-xs text-muted-foreground">
                   {selected.entity_type} · degree {selected.degree}
                 </p>
               </div>
@@ -234,7 +234,7 @@ export default function GraphViewer({ onClose }) {
         )}
 
         {typeCounts.length > 0 && !selected && (
-          <div className="pointer-events-none absolute left-3 top-3 z-10 hidden max-w-xs flex-wrap gap-1.5 rounded-lg border border-border bg-card/90 p-2 text-[10px] backdrop-blur sm:flex">
+          <div className="pointer-events-none absolute left-3 top-3 z-10 hidden max-w-xs flex-wrap gap-1.5 rounded-lg border border-border bg-card/90 p-2 text-[11px] backdrop-blur sm:flex">
             {typeCounts.slice(0, 8).map(([type, count]) => (
               <span
                 key={type}

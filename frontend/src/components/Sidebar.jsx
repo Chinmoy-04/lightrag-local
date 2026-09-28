@@ -31,123 +31,138 @@ export default function Sidebar({
   const modesDisabled = isIndexing || graphOpen || compareOpen
 
   return (
-    <aside className="flex w-full shrink-0 flex-col gap-6 border-b border-sidebar-border bg-sidebar p-5 md:h-screen md:w-80 md:border-b-0 md:border-r md:overflow-y-auto">
-      {/* Brand */}
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-sm font-bold text-primary-foreground shadow-sm">
+    <aside
+      data-lenis-prevent
+      className="flex w-full shrink-0 flex-col overflow-y-auto border-b border-sidebar-border bg-sidebar/90 backdrop-blur-sm md:h-full md:w-72 md:border-b-0 md:border-r md:overflow-y-auto lg:w-80"
+    >      <div className="flex items-center justify-between gap-3 border-b border-sidebar-border px-5 py-4">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-primary font-mono text-xs font-semibold tracking-tight text-primary-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.18)]">
             LR
           </div>
-          <div>
-            <h1 className="text-sm font-semibold text-sidebar-foreground">LightRAG Local</h1>
-            <p className="text-[11px] text-muted-foreground">arXiv:2410.05779 · fully offline</p>
+          <div className="min-w-0">
+            <h1 className="truncate text-sm font-semibold tracking-tight text-sidebar-foreground">
+              LightRAG Local
+            </h1>
+            <p className="truncate font-mono text-[11px] text-muted-foreground">
+              arXiv:2410.05779
+            </p>
           </div>
         </div>
         <SwitchButton size="sm" showLabel={false} className="shrink-0 px-2.5" aria-label="Toggle theme" />
       </div>
 
-      {/* Status card */}
-      <div className="rounded-xl border border-border bg-card p-3.5">
-        <div className="flex items-center gap-2">
-          <StatusDot variant={statusVariant} pulse={!ready && !healthError} />
-          <span className="text-sm font-medium text-card-foreground">{statusLabel}</span>
-        </div>
-        <dl className="mt-3 space-y-1.5 text-xs">
-          <div className="flex items-center justify-between">
-            <dt className="text-muted-foreground">Query LLM</dt>
-            <dd className="font-mono text-card-foreground">{health?.llm_model_query ?? '—'}</dd>
+      <div className="flex flex-1 flex-col gap-6 px-5 py-5">
+        <section>
+          <div className="flex items-center gap-2">
+            <StatusDot variant={statusVariant} pulse={!ready && !healthError} />
+            <span className="text-sm font-medium text-sidebar-foreground">{statusLabel}</span>
           </div>
-          {health?.llm_model_extract && health.llm_model_extract !== health.llm_model_query && (
-            <div className="flex items-center justify-between">
-              <dt className="text-muted-foreground">Extract LLM</dt>
-              <dd className="font-mono text-card-foreground">{health.llm_model_extract}</dd>
+          <dl className="mt-3 divide-y divide-border/70 text-xs">
+            <div className="flex items-center justify-between gap-3 py-2">
+              <dt className="text-muted-foreground">Query</dt>
+              <dd className="truncate font-mono text-[11px] text-sidebar-foreground">
+                {health?.llm_model_query ?? '-'}
+              </dd>
+            </div>
+            {health?.llm_model_extract && health.llm_model_extract !== health.llm_model_query && (
+              <div className="flex items-center justify-between gap-3 py-2">
+                <dt className="text-muted-foreground">Extract</dt>
+                <dd className="truncate font-mono text-[11px] text-sidebar-foreground">
+                  {health.llm_model_extract}
+                </dd>
+              </div>
+            )}
+            <div className="flex items-center justify-between gap-3 py-2">
+              <dt className="text-muted-foreground">Embed</dt>
+              <dd className="truncate font-mono text-[11px] text-sidebar-foreground">
+                {health?.embedding_model ?? '-'}
+              </dd>
+            </div>
+            <div className="flex items-center justify-between gap-3 py-2">
+              <dt className="text-muted-foreground">Corpus</dt>
+              <dd
+                className={
+                  health?.corpus_present
+                    ? 'font-mono text-[11px] text-primary'
+                    : 'font-mono text-[11px] text-amber-700 dark:text-amber-400'
+                }
+              >
+                {health?.corpus_present ? 'loaded' : 'missing'}
+              </dd>
+            </div>
+          </dl>
+        </section>
+
+        <ModeSelector value={mode} onChange={onModeChange} disabled={modesDisabled} />
+
+        <section className="space-y-2">
+          <p className="text-xs font-medium text-muted-foreground">Knowledge graph</p>
+          <Button
+            type="button"
+            onClick={onIndex}
+            disabled={isIndexing || !health?.corpus_present}
+            size="lg"
+            className="w-full gap-2 transition-transform duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] active:scale-[0.98]"
+          >
+            {isIndexing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Database className="h-4 w-4" />}
+            {isIndexing ? 'Building graph…' : 'Build knowledge graph'}
+          </Button>
+
+          {/* Deliberately quieter than Build: these inspect existing state,
+              they don't take the primary action of the sidebar. */}
+          <div className="grid grid-cols-2 gap-1.5">
+            <Button
+              type="button"
+              variant={graphOpen ? 'secondary' : 'ghost'}
+              size="sm"
+              onClick={onOpenGraph}
+              disabled={!ready}
+              className="gap-1.5 transition-transform duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] active:scale-[0.97]"
+            >
+              <Network className="h-3.5 w-3.5" />
+              Graph
+            </Button>
+            <Button
+              type="button"
+              variant={compareOpen ? 'secondary' : 'ghost'}
+              size="sm"
+              onClick={onOpenCompare}
+              disabled={!ready}
+              className="gap-1.5 transition-transform duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] active:scale-[0.97]"
+            >
+              <Scale className="h-3.5 w-3.5" />
+              Compare
+            </Button>
+          </div>
+
+          {isIndexing && (
+            <p className="pt-1 text-xs leading-relaxed text-muted-foreground">
+              Extraction runs one chunk at a time on local hardware. Full corpus can take hours.
+              Watch the backend terminal; don&apos;t click Build again mid-run.
+            </p>
+          )}
+
+          {!isIndexing && indexResult && (
+            <div className="flex items-start gap-2 rounded-lg bg-primary/10 p-2.5 text-xs text-primary ring-1 ring-inset ring-primary/20">
+              <CircleCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>
+                Indexed {indexResult.documents} document{indexResult.documents === 1 ? '' : 's'} (
+                {formatChars(indexResult.characters)} chars) in {indexResult.latency_seconds}s.
+              </span>
             </div>
           )}
-          <div className="flex items-center justify-between">
-            <dt className="text-muted-foreground">Embeddings</dt>
-            <dd className="font-mono text-card-foreground">{health?.embedding_model ?? '—'}</dd>
-          </div>
-          <div className="flex items-center justify-between">
-            <dt className="text-muted-foreground">Corpus</dt>
-            <dd className={health?.corpus_present ? 'text-primary' : 'text-amber-600 dark:text-amber-400'}>
-              {health?.corpus_present ? 'loaded' : 'missing'}
-            </dd>
-          </div>
-        </dl>
-      </div>
 
-      {/* Mode selector */}
-      <ModeSelector value={mode} onChange={onModeChange} disabled={modesDisabled} />
+          {!isIndexing && indexError && (
+            <div className="flex items-start gap-2 rounded-lg bg-destructive/10 p-2.5 text-xs text-destructive ring-1 ring-inset ring-destructive/20">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>{indexError}</span>
+            </div>
+          )}
+        </section>
 
-      {/* Index + explore */}
-      <div>
-        <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-          Knowledge graph
-        </span>
-        <Button
-          type="button"
-          onClick={onIndex}
-          disabled={isIndexing || !health?.corpus_present}
-          size="lg"
-          className="mt-2 w-full gap-2"
-        >
-          {isIndexing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Database className="h-4 w-4" />}
-          {isIndexing ? 'Building graph…' : 'Build knowledge graph'}
-        </Button>
-
-        <Button
-          type="button"
-          variant={graphOpen ? 'secondary' : 'outline'}
-          onClick={onOpenGraph}
-          disabled={!ready}
-          size="lg"
-          className="mt-2 w-full gap-2"
-        >
-          <Network className="h-4 w-4" />
-          {graphOpen ? 'Viewing graph' : 'Open graph viewer'}
-        </Button>
-
-        <Button
-          type="button"
-          variant={compareOpen ? 'secondary' : 'outline'}
-          onClick={onOpenCompare}
-          disabled={!ready}
-          size="lg"
-          className="mt-2 w-full gap-2"
-        >
-          <Scale className="h-4 w-4" />
-          {compareOpen ? 'Viewing compare' : 'Compare modes'}
-        </Button>
-
-        {isIndexing && (
-          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-            Entity extraction runs one chunk at a time on local hardware — this can take
-            several hours for the full corpus. Progress is in the backend terminal log.
-            Don&apos;t click Build again while a run is in progress.
-          </p>
-        )}
-
-        {!isIndexing && indexResult && (
-          <div className="mt-2 flex items-start gap-2 rounded-lg bg-primary/10 p-2.5 text-xs text-primary ring-1 ring-inset ring-primary/20">
-            <CircleCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <span>
-              Indexed {indexResult.documents} document{indexResult.documents === 1 ? '' : 's'} (
-              {formatChars(indexResult.characters)} chars) in {indexResult.latency_seconds}s.
-            </span>
-          </div>
-        )}
-
-        {!isIndexing && indexError && (
-          <div className="mt-2 flex items-start gap-2 rounded-lg bg-destructive/10 p-2.5 text-xs text-destructive ring-1 ring-inset ring-destructive/20">
-            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <span>{indexError}</span>
-          </div>
-        )}
-      </div>
-
-      <div className="mt-auto text-[11px] leading-relaxed text-muted-foreground">
-        Indexed corpus: 30 recent papers on retrieval-augmented generation, so shared
-        entities give global/hybrid mode something real to traverse.
+        <p className="mt-auto text-xs leading-relaxed text-muted-foreground">
+          Corpus: 30 RAG papers. Shared entities give global/hybrid something real to walk.
+        </p>
       </div>
     </aside>
   )

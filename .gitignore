@@ -8,3 +8,7 @@ frontend/node_modules/
 frontend/dist/
 *.log
 .DS_Store
+
+# Brag / Hyperframes workdirs (shipped demo lives in demo/)
+brag-output*/
+

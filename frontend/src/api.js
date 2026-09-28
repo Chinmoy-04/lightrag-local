@@ -32,11 +32,16 @@ export async function postIndex() {
   }
 }
 
-export async function postQuery(prompt, mode) {
+export async function postQuery(prompt, mode, { signal } = {}) {
   try {
-    const { data } = await client.post('/query', { prompt, mode })
+    const { data } = await client.post('/query', { prompt, mode }, { signal })
     return data
   } catch (error) {
+    if (error.code === 'ERR_CANCELED' || error.name === 'CanceledError') {
+      const cancelled = new Error('cancelled')
+      cancelled.cancelled = true
+      throw cancelled
+    }
     throw unwrapError(error)
   }
 }
@@ -52,7 +57,10 @@ export async function getGraph(limit = 400) {
 
 export async function getCompare() {
   try {
-    const { data } = await client.get('/compare')
+    const { data } = await client.get('/compare', {
+      params: { _: Date.now() },
+      headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
+    })
     return data
   } catch (error) {
     throw unwrapError(error)

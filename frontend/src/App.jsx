@@ -1,20 +1,37 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ReactLenis, useLenis } from 'lenis/react'
-import { Sparkles } from 'lucide-react'
+import { ReactLenis } from 'lenis/react'
+import { Database, Loader2 } from 'lucide-react'
 import { getHealth, postIndex, postQuery } from './api'
 import Sidebar from './components/Sidebar'
 import Composer from './components/Composer'
 import ChatMessage, { ThinkingBubble } from './components/ChatMessage'
 import GraphViewer from './components/GraphViewer'
 import CompareView from './components/CompareView'
+import { Button } from './components/ui/button'
 
 const EXAMPLE_PROMPTS = [
   'How do these papers combine knowledge graphs with retrieval-augmented generation?',
   'What approaches are used for multi-hop reasoning in RAG systems?',
   'What privacy or safety risks do these papers raise about RAG?',
+  'Which systems use entity linking or relation extraction before retrieval?',
+  'How do the papers evaluate graph-based RAG against naive vector search?',
+  'What failure modes appear when the knowledge graph is incomplete or noisy?',
+  'Summarize Graph-RAG, CoG, and related methods mentioned in the corpus.',
+  'When would hybrid mode help more than local-only retrieval?',
 ]
 
 const HEALTH_POLL_MS = 20_000
+
+const LENIS_OPTIONS = {
+  autoRaf: true,
+  lerp: 0.08,
+  smoothWheel: true,
+  syncTouch: true,
+  touchMultiplier: 1.2,
+  // Nested scroll containers (e.g. code blocks) stay usable.
+  allowNestedScroll: true,
+  respectReducedMotion: true,
+}
 
 function newId() {
   return typeof crypto !== 'undefined' && crypto.randomUUID
@@ -35,9 +52,11 @@ export default function App() {
   const [isIndexing, setIsIndexing] = useState(false)
   const [indexResult, setIndexResult] = useState(null)
   const [indexError, setIndexError] = useState(null)
+  const [hasIndexedThisSession, setHasIndexedThisSession] = useState(false)
 
   const scrollAnchorRef = useRef(null)
-  const lenis = useLenis()
+  const queryAbortRef = useRef(null)
+  const chatLenisRef = useRef(null)
 
   const refreshHealth = useCallback(async () => {
     try {
@@ -55,16 +74,28 @@ export default function App() {
     return () => clearInterval(interval)
   }, [refreshHealth])
 
+  // Keep the latest message in view inside the chat Lenis container only.
   useEffect(() => {
     if (view !== 'chat') return
     const anchor = scrollAnchorRef.current
     if (!anchor) return
+    const lenis = chatLenisRef.current?.lenis
     if (lenis) {
-      lenis.scrollTo(anchor, { duration: 0.6 })
+      lenis.scrollTo(anchor, { offset: 24, duration: 0.9, lerp: 0.1 })
     } else {
       anchor.scrollIntoView({ behavior: 'smooth', block: 'end' })
     }
-  }, [messages, isQuerying, lenis, view])
+  }, [messages, isQuerying, view])
+
+  useEffect(() => {
+    function handleKeyDown(event) {
+      if (event.key === 'Escape' && view !== 'chat') {
+        setView('chat')
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [view])
 
   async function handleIndex() {
     setIsIndexing(true)
@@ -73,6 +104,7 @@ export default function App() {
     try {
       const result = await postIndex()
       setIndexResult(result)
+      setHasIndexedThisSession(true)
     } catch (error) {
       setIndexError(error.message)
     } finally {
@@ -89,8 +121,11 @@ export default function App() {
     setInput('')
     setIsQuerying(true)
 
+    const controller = new AbortController()
+    queryAbortRef.current = controller
+
     try {
-      const result = await postQuery(trimmed, mode)
+      const result = await postQuery(trimmed, mode, { signal: controller.signal })
       setMessages((prev) => [
         ...prev,
         {
@@ -102,20 +137,39 @@ export default function App() {
         },
       ])
     } catch (error) {
-      setMessages((prev) => [
-        ...prev,
-        { id: newId(), role: 'assistant', error: true, content: error.message },
-      ])
+      if (error.cancelled) {
+        setMessages((prev) => [
+          ...prev,
+          { id: newId(), role: 'assistant', cancelled: true, content: 'Cancelled.' },
+        ])
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          { id: newId(), role: 'assistant', error: true, content: error.message, retryPrompt: trimmed },
+        ])
+      }
     } finally {
       setIsQuerying(false)
+      queryAbortRef.current = null
     }
+  }
+
+  function handleStop() {
+    queryAbortRef.current?.abort()
+  }
+
+  function handleClearThread() {
+    setMessages([])
   }
 
   const graphOpen = view === 'graph'
   const compareOpen = view === 'compare'
+  const showIndexAdvisory =
+    messages.length === 0 && health?.corpus_present && !hasIndexedThisSession
 
   return (
-    <div className="flex min-h-screen flex-col bg-background text-foreground md:flex-row">
+    // Viewport-locked shell: sidebar stays put; only the main pane scrolls.
+    <div className="flex h-[100dvh] max-h-[100dvh] overflow-hidden bg-background text-foreground md:flex-row flex-col">
       <Sidebar
         health={health}
         healthError={healthError}
@@ -131,45 +185,110 @@ export default function App() {
         compareOpen={compareOpen}
       />
 
-      <main className="flex min-h-screen min-h-0 flex-1 flex-col">
+      <main className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         {graphOpen ? (
           <GraphViewer onClose={() => setView('chat')} />
         ) : compareOpen ? (
           <CompareView onClose={() => setView('chat')} />
         ) : (
-          <>
-            <ReactLenis root="asChild" options={{ autoRaf: true }}>
-              <div className="flex-1 overflow-y-auto px-4 py-6 md:px-8">
+          <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+            {/*
+              ReactLenis creates its own wrapper+content divs. Put the height
+              constraint on `className` (the wrapper), not on a child with flex-1,
+              or the wrapper grows with content and nothing scrolls.
+            */}
+            <ReactLenis ref={chatLenisRef} className="chat-scroll" options={LENIS_OPTIONS}>
+              <div className="px-4 py-8 md:px-10 md:py-10">
                 {messages.length === 0 ? (
-                  <div className="mx-auto flex h-full max-w-xl flex-col items-center justify-center text-center">
-                    <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-inset ring-primary/20">
-                      <Sparkles className="h-5 w-5" />
-                    </div>
-                    <h2 className="text-base font-semibold text-foreground">
-                      Ask about the indexed RAG papers
-                    </h2>
-                    <p className="mt-1.5 text-sm text-muted-foreground">
-                      Pick a retrieval mode on the left, then ask a question. Try one below —
-                      or open Compare for the saved four-mode scorecard.
-                    </p>
-                    <div className="mt-5 flex w-full flex-col gap-2">
-                      {EXAMPLE_PROMPTS.map((prompt) => (
-                        <button
-                          key={prompt}
+                  <div className="mx-auto flex w-full max-w-5xl flex-col gap-8">
+                    {showIndexAdvisory && (
+                      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-primary/25 bg-primary/5 px-4 py-3 text-sm text-foreground">
+                        <p className="max-w-[52ch] leading-relaxed">
+                          No graph built this session yet. Naive mode can still hit an existing
+                          vector index on disk; local/global/hybrid need the knowledge graph.
+                        </p>
+                        <Button
                           type="button"
-                          onClick={() => sendPrompt(prompt)}
-                          className="rounded-xl border border-border bg-card px-4 py-2.5 text-left
-                                     text-sm text-card-foreground transition-colors hover:border-primary/40 hover:bg-muted"
+                          size="sm"
+                          onClick={handleIndex}
+                          disabled={isIndexing}
+                          className="shrink-0 gap-1.5"
                         >
-                          {prompt}
-                        </button>
-                      ))}
+                          {isIndexing ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Database className="h-3.5 w-3.5" />
+                          )}
+                          Build now
+                        </Button>
+                      </div>
+                    )}
+
+                    <div className="grid gap-10 md:grid-cols-2 md:items-start">
+                      <div>
+                        <h2 className="text-2xl font-semibold tracking-tight text-foreground md:text-[28px]">
+                          Ask the indexed corpus
+                        </h2>
+                        <p className="mt-3 max-w-[38ch] text-sm leading-relaxed text-muted-foreground">
+                          30 RAG papers. Naive and local answer in seconds; global and hybrid can
+                          run much longer depending on the query model.
+                        </p>
+                        <dl className="mt-6 space-y-2 border-t border-border pt-4 font-mono text-xs">
+                          <div className="flex items-baseline justify-between gap-3">
+                            <dt className="text-muted-foreground">corpus</dt>
+                            <dd className="text-foreground">
+                              {health?.corpus_present ? 'loaded' : 'missing'}
+                            </dd>
+                          </div>
+                          <div className="flex items-baseline justify-between gap-3">
+                            <dt className="text-muted-foreground">mode</dt>
+                            <dd className="text-foreground">{mode}</dd>
+                          </div>
+                          <div className="flex items-baseline justify-between gap-3">
+                            <dt className="text-muted-foreground">query llm</dt>
+                            <dd className="truncate pl-3 text-right text-foreground">
+                              {health?.llm_model_query ?? 'unknown'}
+                            </dd>
+                          </div>
+                        </dl>
+                      </div>
+
+                      <div>
+                        <p className="text-xs text-muted-foreground">Try one</p>
+                        <div className="prompt-stagger mt-2 flex flex-col divide-y divide-border border-y border-border">
+                          {EXAMPLE_PROMPTS.map((prompt) => (
+                            <button
+                              key={prompt}
+                              type="button"
+                              onClick={() => sendPrompt(prompt)}
+                              className="group flex items-baseline gap-2.5 py-3 text-left text-sm text-foreground transition-colors duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] hover:text-primary"
+                            >
+                              <span className="font-mono text-muted-foreground transition-colors group-hover:text-primary">
+                                &gt;
+                              </span>
+                              <span className="leading-snug">{prompt}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                     </div>
                   </div>
                 ) : (
-                  <div className="mx-auto flex max-w-2xl flex-col gap-3">
+                  <div className="mx-auto flex max-w-2xl flex-col gap-4 pb-4">
+                    <div className="flex items-baseline justify-between">
+                      <p className="font-mono text-[11px] text-muted-foreground">
+                        {messages.length} message{messages.length === 1 ? '' : 's'}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={handleClearThread}
+                        className="font-mono text-[11px] text-muted-foreground transition-colors hover:text-destructive"
+                      >
+                        Clear thread
+                      </button>
+                    </div>
                     {messages.map((message) => (
-                      <ChatMessage key={message.id} message={message} />
+                      <ChatMessage key={message.id} message={message} onRetry={sendPrompt} />
                     ))}
                     {isQuerying && <ThinkingBubble mode={mode} />}
                     <div ref={scrollAnchorRef} />
@@ -178,16 +297,19 @@ export default function App() {
               </div>
             </ReactLenis>
 
-            <div className="mx-auto w-full max-w-2xl">
-              <Composer
-                value={input}
-                onChange={setInput}
-                onSubmit={() => sendPrompt(input)}
-                disabled={isQuerying}
-                placeholder={`Ask something · ${mode} mode`}
-              />
+            <div className="shrink-0 border-t border-border bg-background">
+              <div className="mx-auto w-full max-w-2xl">
+                <Composer
+                  value={input}
+                  onChange={setInput}
+                  onSubmit={() => sendPrompt(input)}
+                  onStop={handleStop}
+                  disabled={isQuerying}
+                  placeholder={`Ask something · ${mode} mode`}
+                />
+              </div>
             </div>
-          </>
+          </div>
         )}
       </main>
     </div>

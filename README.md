@@ -1,6 +1,12 @@
 # LightRAG Local
 
-Fully local reproduction of [LightRAG](https://arxiv.org/abs/2410.05779) (arXiv:2410.05779) on **native Windows**. Indexing and chat run on Ollama (LLM + embeddings on your GPU); FastAPI bridges the NetworkX graph store; a React UI covers chat, mode compare, and the knowledge graph. An **optional** cloud LLM judge (e.g. DeepSeek) can score the four modes the way the paper does — generation itself stays local unless you change that.
+Fully local reproduction of [LightRAG](https://arxiv.org/abs/2410.05779) (arXiv:2410.05779) on **native Windows**. Indexing and chat run on Ollama (LLM + embeddings on your GPU); FastAPI bridges the NetworkX graph store; a React UI covers chat, mode compare, and the knowledge graph. An **optional** cloud LLM judge (e.g. DeepSeek) can score the four modes the way the paper does; generation itself stays local unless you change that.
+
+## Demo
+
+[![LightRAG Local — 40s demo](demo/brag.jpg)](demo/brag.mp4)
+
+[Watch the 40-second walkthrough](demo/brag.mp4) — Chat, Graph, and Compare, plus what we actually found when we ran the paper locally (Naive still won the judge; the graph extract is the bottleneck).
 
 **Current workspace state (after a full run on this machine):**
 
@@ -9,7 +15,7 @@ Fully local reproduction of [LightRAG](https://arxiv.org/abs/2410.05779) (arXiv:
 | Corpus | 30 arXiv RAG-focused papers → `workspace/corpus.txt` |
 | Index | All 30 documents `processed` |
 | Graph | ~6.5k nodes / ~6.9k edges in `workspace/graph_chunk_entity_relation.graphml` |
-| Models | `llama3.1:8b` + `nomic-embed-text` |
+| Models | Index/extract: `llama3.1:8b` + `nomic-embed-text`; query can be local 8B or DeepSeek (`LLM_PROVIDER=openai`) |
 
 ---
 
@@ -112,7 +118,7 @@ Or use the sidebar button in the UI. Progress is in the **uvicorn** terminal, no
 | --- | --- |
 | Per paper | Roughly 8–90+ minutes (depends on length / extract retries) |
 | Full 30-paper ingest | On the order of **~20–25 hours wall clock** on 8GB VRAM, often split across pause/resume sessions |
-| Early “7–10h” estimate | Too optimistic — it only extrapolated per-chunk smoke tests |
+| Early “7–10h” estimate | Too optimistic; it only extrapolated per-chunk smoke tests |
 
 Indexing is **resumable**: already-`processed` papers are skipped; interrupted papers are reset to pending and continued. LLM extract responses are cached under `workspace/kv_store_llm_response_cache.json`.
 
@@ -145,7 +151,7 @@ Example prompt that stresses graph modes:
 
 > How do these papers combine knowledge graphs with retrieval-augmented generation?
 
-On this hardware, **naive** and **local** completed in ~20s each. **global** / **hybrid** built retrieval context successfully but LLM answer generation ran for tens of minutes and could truncate at the context length (pathological long answers). Prefer naive/local for interactive use; treat global/hybrid as overnight experiments or tighten generation settings later.
+On this hardware with **local 8B** generation, **naive** / **local** were ~20s; **global** / **hybrid** could run for many minutes (global once produced huge repetitive answers). With **DeepSeek as query** (same local graph), all four modes finished in ~4–5s. Prefer cloud query for interactive chat; the paper-style judge still favored **naive** until the graph is rebuilt with a stronger extract model.
 
 ### Knowledge graph viewer
 
@@ -186,54 +192,82 @@ Refresh Compare afterward to see the judge panel.
 
 ## What we actually found (honest notes)
 
-This is a **working local LightRAG stack**, not a claim that we reproduced the paper’s quality numbers.
+This is a **working LightRAG stack on a laptop**, not a claim that we reproduced the paper’s quality numbers.
 
 ### What matches the paper
 
 - Same core idea: chunk → extract entities/relations → NetworkX graph → retrieve with **naive / local / global / hybrid**, then generate.
-- Modes behave differently in practice: naive is “vector chunks only,” local hugs entity neighborhoods, global/hybrid pull broader relation context and get heavier.
-- We did a **lightweight LLM-as-judge** on Comprehensiveness / Diversity / Empowerment — the paper’s style of comparison, **not** a full Ragas / formal benchmark suite.
+- Modes behave differently in practice: naive is “vector chunks only,” local hugs entity neighborhoods, global/hybrid pull broader relation context.
+- We did a **lightweight LLM-as-judge** on Comprehensiveness / Diversity / Empowerment (the paper’s style of comparison, **not** a full Ragas / formal benchmark suite).
 
 ### What does *not* match a paper-grade run
 
 | Paper-ish setup | This machine |
 | --- | --- |
-| Stronger / larger LLMs for extract + answer | `llama3.1:8b` on ~8GB VRAM |
+| Stronger LLMs for **both** extract and answer | Graph built with `llama3.1:8b`; answers can be local 8B **or** DeepSeek |
 | Curated eval questions & multiple datasets | One RAG-focused arXiv corpus (~30 papers), one compare prompt |
-| Careful decoding / length control | Global once generated ~437k characters of repetitive text (~26 min) |
-| Cloud or big-GPU training/eval budget | Fully local Ollama + a one-shot DeepSeek judge |
+| Careful decoding / length control | Local-8B global once printed ~437k chars of fluff (~26 min) |
+| Big eval budget | Optional DeepSeek for query + judge (cents), not a full paper redo |
 
 So: **architecture yes, “LightRAG wins the leaderboard” no.**
 
-### Four-mode timing (same prompt)
+### Same prompt, two query models
 
-Prompt used: *How do these papers combine knowledge graphs with retrieval-augmented generation?*
+Prompt: *How do these papers combine knowledge graphs with retrieval-augmented generation?*  
+Graph + embeddings stayed local (`llama3.1:8b` extract, `nomic-embed-text`). Only the **answer writer** changed.
+
+**Run A: query = local `llama3.1:8b`**
 
 | Mode | Latency | Notes |
 | --- | --- | --- |
-| naive | ~20s | Short, concrete, named papers/systems |
-| local | ~21s | Graph-local; thinner / more generic here |
-| hybrid | ~9 min | Heavier context; usable answer length |
-| global | ~26 min | Retrieval OK; generation went pathological |
+| naive | ~20s | Concrete; named systems |
+| local | ~21s | Thinner / more generic |
+| hybrid | ~9 min | Heavy; usable length |
+| global | ~26 min | Pathological repetition |
 
-Interactive use: stick to **naive** / **local**. Treat **global** / **hybrid** as experiments unless you tighten generation.
+**Run B: query = DeepSeek `deepseek-chat`** (same graph)
 
-### Paper-style judge (DeepSeek, one call)
+| Mode | Latency | Chars |
+| --- | --- | --- |
+| naive | ~4.2s | ~3.7k |
+| local | ~5.1s | ~4.0k |
+| global | ~4.1s | ~2.5k |
+| hybrid | ~4.7s | ~3.0k |
 
-Scores 1–10 on the paper axes (answers truncated for the judge — especially global):
+DeepSeek fixed the “global melts the clock” problem. All four modes became interactive. Cost was negligible on a small prepaid balance.
 
-| Mode | Comprehensiveness | Diversity | Empowerment |
+### Paper-style judge (DeepSeek scoring both runs)
+
+Scores 1–10. Run A’s global answer was truncated for the judge because it was huge.
+
+**Run A (8B answers)**
+
+| Mode | Comp. | Div. | Emp. |
 | --- | --- | --- | --- |
 | **naive** | 8 | 7 | 8 |
 | hybrid | 6 | 6 | 5 |
 | global | 5 | 5 | 4 |
 | local | 4 | 3 | 4 |
 
-**Winner: naive.** That surprised us relative to the paper’s hybrid/global story — and it’s believable *here*: the 8B graph extract is noisy, global’s answer was bloated fluff (and truncated for judging), and naive still surfaces raw chunk text that happens to name Graph-RAG / CoG / etc. A stronger extract+query model would likely reshuffle this; we did not re-run indexing on a frontier model.
+**Run B (DeepSeek answers)**
+
+| Mode | Comp. | Div. | Emp. |
+| --- | --- | --- | --- |
+| **naive** | 9 | 9 | 8 |
+| local | 8 | 7 | 8 |
+| hybrid | 7 | 6 | 7 |
+| global | 6 | 5 | 6 |
+
+**Winner both times: naive.** Graph modes got *better* with DeepSeek (local jumped hard), but naive stayed ahead. That undercuts the hopeful story that “just use a stronger query model and hybrid will look like the paper.” Writing got cleaner; **what gets retrieved** still comes from an 8B-extracted graph, and on this one prompt the raw chunks still won the judge.
 
 ### Takeaway
 
-Good demo of **how LightRAG feels end-to-end on a laptop**. Weak evidence for the paper’s quality claims. If you want answers closer to the paper’s vibe without rebuilding everything, swapping **query** generation to DeepSeek (keep local embeddings + existing graph) is cheap (cents per query); rebuilding the graph with a stronger **extract** model is the expensive/meaningful upgrade.
+- Good demo of **how LightRAG feels end-to-end** (index → graph UI → mode compare → paper-style judge).
+- Weak evidence for the paper’s quality ranking on this corpus/hardware.
+- **Query → DeepSeek:** cheap, fast, stops runaway answers. Worth doing for chat UX.
+- **Extract → stronger model + re-index:** the upgrade that would actually stress-test whether local/global/hybrid can beat naive the way the paper claims. We have not done that yet.
+
+Set `LLM_PROVIDER=openai` (plus DeepSeek key / base URL) in `.env` to use cloud for query while keeping Ollama embeddings and the existing graph. See `scripts/run_mode_compare.py` and `scripts/paper_compare_judge.py`.
 
 ---
 
@@ -269,7 +303,8 @@ curl.exe -s -X POST http://127.0.0.1:8000/query `
 │   ├── inspect_corpus.py
 │   ├── bench_ollama.py
 │   ├── probe_queries.py         # arXiv query design helper (not RAG probes)
-│   └── paper_compare_judge.py   # optional DeepSeek/Groq/Ollama mode judge
+│   ├── paper_compare_judge.py   # optional DeepSeek/Groq/Ollama mode judge
+│   └── run_mode_compare.py      # hit /query for all four modes → mode_comparison.json
 ├── frontend/                    # React chat + graph + Compare dashboard
 └── workspace/                   # gitignored: corpus, PDFs, GraphML, KV, compare JSON
 ```
@@ -283,8 +318,12 @@ Environment variables (optional; defaults match the 8GB profile):
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `OLLAMA_HOST` | `http://127.0.0.1:11434` | |
-| `LLM_MODEL` | `llama3.1:8b` | Query + keyword (+ extract unless overridden) |
-| `EXTRACT_LLM_MODEL` | (same as `LLM_MODEL`) | Optional extract-only override; `llama3.2:3b` was **slower** here due to malformed structured-output recoveries |
+| `LLM_PROVIDER` | `ollama` | `openai` / `deepseek` / `groq` → OpenAI-compatible chat for **query** (+ keywords) |
+| `LLM_MODEL` | `llama3.1:8b` (or `deepseek-chat` if provider is openai) | Query + keyword model name |
+| `EXTRACT_LLM_MODEL` | same as query, or `llama3.1:8b` when query is cloud | Entity/relation extract; keep local if query is DeepSeek |
+| `OPENAI_API_KEY` / `JUDGE_API_KEY` | (none) | Required when `LLM_PROVIDER=openai` |
+| `OPENAI_BASE_URL` / `JUDGE_BASE_URL` | `https://api.deepseek.com/v1` | OpenAI-compatible base URL |
+| `OPENAI_MAX_TOKENS` | `2048` | Caps cloud answer length (stops runaway global) |
 | `EMBEDDING_MODEL` | `nomic-embed-text` | |
 | `EMBEDDING_DIM` | `768` | |
 | `OLLAMA_NUM_CTX` | `8192` | |
@@ -299,10 +338,10 @@ Extraction needs long timeouts: a 240s LightRAG default caused mid-chunk failure
 
 ## Operational tips
 
-1. **Always start Ollama before the API** — startup probes embeddings and will fail if Ollama is down.
+1. **Always start Ollama before the API.** Startup probes embeddings and will fail if Ollama is down.
 2. **Use `curl.exe` on PowerShell**, not `curl`.
 3. **Use `python -m uvicorn`** if bare `uvicorn` is “not recognized”.
-4. **One `/index` at a time** — concurrent Index from the UI previously produced a false “Indexed 30 docs in 0.2s” while the real job was still running.
+4. **One `/index` at a time.** Concurrent Index from the UI previously produced a false “Indexed 30 docs in 0.2s” while the real job was still running.
 5. **failed stubs** in `kv_store_doc_status.json` often mean duplicate re-inserts (`File name already exists`), not missing corpus papers. Trust the `processed` count.
 6. Graph grows on disk as papers finish; the viewer reads GraphML from disk (safe during/after index).
 
@@ -327,7 +366,7 @@ python scripts\probe_queries.py     # compare arXiv search queries when rebuildi
 | `Failed to connect to Ollama` | Start `ollama serve`; check `:11434` |
 | Index extract timeouts | Ensure `TIMEOUT=0` and `LLM_WORKER_TIMEOUT=3600` (defaults) |
 | UI “Indexed in 0.18s” but graph tiny | Spurious concurrent Index; check uvicorn logs for real `[n/30]` progress |
-| Global/hybrid hang | Expected on 8B for heavy prompts; try `local`/`naive` or leave overnight |
+| Global/hybrid hang (local 8B) | Switch query to DeepSeek (`LLM_PROVIDER=openai`) or use `naive`/`local` |
 
 ---
 

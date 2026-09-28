@@ -1,4 +1,4 @@
-import { AlertTriangle, Clock } from 'lucide-react'
+import { AlertTriangle, Clock, RotateCcw } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import AITextLoading from './kokonutui/ai-text-loading'
 
@@ -47,7 +47,7 @@ function latencyTone(seconds) {
 
 function ModeBadge({ mode }) {
   return (
-    <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium capitalize text-primary ring-1 ring-inset ring-primary/25">
+    <span className="rounded-md bg-primary/10 px-2 py-0.5 font-mono text-[11px] font-medium uppercase tracking-wide text-primary ring-1 ring-inset ring-primary/25">
       {mode}
     </span>
   )
@@ -56,7 +56,7 @@ function ModeBadge({ mode }) {
 function LatencyBadge({ seconds }) {
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${latencyTone(seconds)}`}
+      className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 font-mono text-[11px] font-medium ring-1 ring-inset ${latencyTone(seconds)}`}
     >
       <Clock className="h-3 w-3" />
       {formatLatency(seconds)}
@@ -77,14 +77,24 @@ function Paragraphs({ text }) {
   )
 }
 
-export default function ChatMessage({ message }) {
+export default function ChatMessage({ message, onRetry }) {
   const isUser = message.role === 'user'
 
   if (isUser) {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[85%] rounded-2xl rounded-tr-sm bg-primary px-4 py-2.5 text-[13px] leading-relaxed text-primary-foreground shadow-sm">
+        <div className="max-w-[85%] rounded-xl rounded-tr-sm bg-primary px-4 py-2.5 text-[13px] leading-relaxed text-primary-foreground shadow-[var(--shadow-warm)]">
           <Paragraphs text={message.content} />
+        </div>
+      </div>
+    )
+  }
+
+  if (message.cancelled) {
+    return (
+      <div className="flex justify-start">
+        <div className="max-w-[85%] rounded-xl rounded-tl-sm px-4 py-2.5 text-[13px] italic text-muted-foreground ring-1 ring-inset ring-border">
+          {message.content}
         </div>
       </div>
     )
@@ -94,7 +104,7 @@ export default function ChatMessage({ message }) {
     <div className="flex justify-start">
       <div
         className={[
-          'max-w-[85%] rounded-2xl rounded-tl-sm px-4 py-3 text-[13px] leading-relaxed shadow-sm',
+          'max-w-[85%] rounded-xl rounded-tl-sm px-4 py-3 text-[13px] leading-relaxed',
           message.error
             ? 'bg-destructive/10 text-destructive ring-1 ring-inset ring-destructive/25'
             : 'bg-card text-card-foreground ring-1 ring-inset ring-border',
@@ -110,6 +120,16 @@ export default function ChatMessage({ message }) {
           <Paragraphs text={message.content} />
         ) : (
           <ReactMarkdown components={MARKDOWN_COMPONENTS}>{message.content}</ReactMarkdown>
+        )}
+        {message.error && message.retryPrompt && onRetry && (
+          <button
+            type="button"
+            onClick={() => onRetry(message.retryPrompt)}
+            className="mt-2.5 flex items-center gap-1.5 border-t border-destructive/25 pt-2.5 text-xs font-medium text-destructive transition-colors hover:text-destructive/80"
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            Try again
+          </button>
         )}
         {!message.error && message.latency != null && (
           <div className="mt-2.5 flex items-center gap-1.5 border-t border-border pt-2.5">
@@ -132,8 +152,8 @@ const GRAPH_LOADING_PHRASES = [
 export function ThinkingBubble({ mode }) {
   return (
     <div className="flex justify-start">
-      <div className="flex items-center gap-2.5 rounded-2xl rounded-tl-sm bg-card px-4 py-3 text-[13px] ring-1 ring-inset ring-border">
-        <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium capitalize text-primary ring-1 ring-inset ring-primary/25">
+      <div className="flex items-center gap-2.5 rounded-xl rounded-tl-sm bg-card px-4 py-3 text-[13px] ring-1 ring-inset ring-border">
+        <span className="rounded-md bg-primary/10 px-2 py-0.5 font-mono text-[11px] font-medium uppercase tracking-wide text-primary ring-1 ring-inset ring-primary/25">
           {mode}
         </span>
         <AITextLoading texts={GRAPH_LOADING_PHRASES} interval={1800} className="text-[13px]" />
