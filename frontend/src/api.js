@@ -40,3 +40,21 @@ export async function postQuery(prompt, mode) {
     throw unwrapError(error)
   }
 }
+
+export async function getGraph(limit = 400) {
+  try {
+    const { data } = await client.get('/graph', { params: { limit } })
+    return data
+  } catch (error) {
+    throw unwrapError(error)
+  }
+}
+
+export async function getCompare() {
+  try {
+    const { data } = await client.get('/compare')
+    return data
+  } catch (error) {
+    throw unwrapError(error)
+  }
+}

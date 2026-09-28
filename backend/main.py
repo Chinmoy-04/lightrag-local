@@ -10,6 +10,8 @@ Hardware notes (RTX 5060 Laptop, 8GB VRAM):
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import os
 import re
@@ -19,11 +21,12 @@ from functools import partial
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from lightrag import LightRAG, QueryParam, RoleLLMConfig
+from lightrag.base import DocStatus
 from lightrag.llm.ollama import ollama_embed, ollama_model_complete
 from lightrag.utils import EmbeddingFunc, setup_logger
 
@@ -45,6 +48,8 @@ except ImportError:  # pragma: no cover - internal API drift in lightrag-hku
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKING_DIR = REPO_ROOT / "workspace"
 CORPUS_PATH = WORKING_DIR / "corpus.txt"
+GRAPHML_PATH = WORKING_DIR / "graph_chunk_entity_relation.graphml"
+COMPARE_PATH = WORKING_DIR / "mode_comparison.json"
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
 LLM_MODEL = os.getenv("LLM_MODEL", "llama3.1:8b")
@@ -65,6 +70,13 @@ EMBED_DIM = int(os.getenv("EMBEDDING_DIM", "768"))  # nomic-embed-text
 NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "8192"))
 CHUNK_TOKENS = int(os.getenv("CHUNK_SIZE", "512"))  # conservative for 8GB VRAM
 MAX_TOTAL_TOKENS = int(os.getenv("MAX_TOTAL_TOKENS", "6000"))
+# Ollama HTTP client timeout. 0 = unlimited (ollama.AsyncClient convention).
+# Local 8B extraction on 8GB VRAM routinely exceeds 15+ minutes per chunk.
+OLLAMA_TIMEOUT = int(os.getenv("TIMEOUT", "0"))
+# LightRAG worker-queue timeout (default_llm_timeout). Worker aborts at 2x.
+# Kept separate from OLLAMA_TIMEOUT so HTTP can be unlimited while the queue
+# still has a safety ceiling.
+LLM_WORKER_TIMEOUT = int(os.getenv("LLM_WORKER_TIMEOUT", "3600"))
 
 DOC_DELIMITER_RE = re.compile(r"^=====\s*PAPER:\s*(\S+)\s*=====\s*$", re.MULTILINE)
 
@@ -77,6 +89,7 @@ setup_logger("lightrag", level="INFO")  # LightRAG's own progress logs
 log = logging.getLogger("backend")
 
 rag: LightRAG | None = None
+_index_lock = asyncio.Lock()
 
 
 def make_extract_role_func(model_name: str):
@@ -138,13 +151,16 @@ async def build_rag() -> LightRAG:
 
     effective_extract_model = EXTRACT_MODEL if "extract" in role_llm_configs else LLM_MODEL
     log.info(
-        "llm(query/keyword)=%s llm(extract)=%s embed=%s(dim=%d) num_ctx=%d chunk=%d",
+        "llm(query/keyword)=%s llm(extract)=%s embed=%s(dim=%d) num_ctx=%d chunk=%d "
+        "ollama_timeout=%s worker_timeout=%ds",
         LLM_MODEL,
         effective_extract_model,
         EMBED_MODEL,
         EMBED_DIM,
         NUM_CTX,
         CHUNK_TOKENS,
+        "unlimited" if OLLAMA_TIMEOUT == 0 else f"{OLLAMA_TIMEOUT}s",
+        LLM_WORKER_TIMEOUT,
     )
 
     instance = LightRAG(
@@ -158,8 +174,9 @@ async def build_rag() -> LightRAG:
         llm_model_kwargs={
             "host": OLLAMA_HOST,
             "options": {"num_ctx": NUM_CTX, "temperature": 0.0},
-            "timeout": int(os.getenv("TIMEOUT", "600")),
+            "timeout": OLLAMA_TIMEOUT,
         },
+        default_llm_timeout=LLM_WORKER_TIMEOUT,
         role_llm_configs=role_llm_configs or None,
         llm_model_max_async=1,  # one generation at a time: 8GB ceiling
         max_parallel_insert=1,  # one document at a time
@@ -241,6 +258,31 @@ class IndexResponse(BaseModel):
     latency_seconds: float
 
 
+class GraphNode(BaseModel):
+    id: str
+    label: str
+    entity_type: str = "UNKNOWN"
+    description: str = ""
+    degree: int = 0
+
+
+class GraphLink(BaseModel):
+    source: str
+    target: str
+    weight: float = 1.0
+    description: str = ""
+    keywords: str = ""
+
+
+class GraphResponse(BaseModel):
+    nodes: list[GraphNode]
+    links: list[GraphLink]
+    total_nodes: int
+    total_links: int
+    truncated: bool
+    path: str
+
+
 def require_rag() -> LightRAG:
     if rag is None:
         raise HTTPException(status_code=503, detail="LightRAG is still initializing")
@@ -283,6 +325,17 @@ async def health() -> dict:
 @app.post("/index", response_model=IndexResponse)
 async def index_corpus() -> IndexResponse:
     """Insert workspace/corpus.txt. Slow on local hardware: watch the logs."""
+    if _index_lock.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="indexing already in progress; wait for the current run to finish",
+        )
+
+    async with _index_lock:
+        return await _run_index()
+
+
+async def _run_index() -> IndexResponse:
     instance = require_rag()
     if not CORPUS_PATH.exists():
         raise HTTPException(
@@ -297,10 +350,38 @@ async def index_corpus() -> IndexResponse:
 
     started = time.perf_counter()
     try:
+        # Only skip fully processed papers. In-flight / interrupted statuses are
+        # left for ainsert to resume (LightRAG resets PARSING/PROCESSING → PENDING).
+        # Concurrent /index is blocked by _index_lock above — do not treat stale
+        # mid-pipeline rows from a previous crash as "already done".
+        processed = await instance.doc_status.get_docs_by_statuses([DocStatus.PROCESSED])
+        skip_paths = {status.file_path for status in processed.values()}
+
         for i, (doc, path) in enumerate(zip(docs, paths), start=1):
+            if path in skip_paths:
+                log.info("[%d/%d] skip %s (already processed)", i, len(docs), path)
+                continue
+
             doc_start = time.perf_counter()
             log.info("[%d/%d] inserting %s (%d chars)", i, len(docs), path, len(doc))
             await instance.ainsert(doc, file_paths=path)
+            # ainsert swallows per-doc extraction failures into doc_status;
+            # abort so a timeout does not silently skip the rest of the corpus.
+            # Ignore duplicate-stub failures ("File name already exists") —
+            # those are expected when re-running /index over already-processed
+            # papers and must not abort the remaining corpus.
+            failed = await instance.doc_status.get_docs_by_statuses([DocStatus.FAILED])
+            failed_for_path = [
+                (doc_id, status)
+                for doc_id, status in failed.items()
+                if status.file_path == path
+                and "File name already exists" not in (status.error_msg or "")
+            ]
+            if failed_for_path:
+                doc_id, status = failed_for_path[0]
+                detail = status.error_msg or "unknown extraction error"
+                raise RuntimeError(f"{path} ({doc_id}) failed: {detail}")
+            skip_paths.add(path)
             log.info("[%d/%d] done in %.1fs", i, len(docs), time.perf_counter() - doc_start)
     except Exception as exc:  # noqa: BLE001
         log.exception("indexing failed")
@@ -350,3 +431,141 @@ async def query(req: QueryRequest) -> QueryResponse:
         latency_seconds=round(elapsed, 2),
         mode=req.mode,
     )
+
+
+@app.get("/graph", response_model=GraphResponse)
+async def get_graph(
+    limit: int = Query(
+        500,
+        ge=50,
+        le=5000,
+        description="Max nodes to return (highest-degree first). Full graph can be 2k+.",
+    ),
+) -> GraphResponse:
+    """Export the LightRAG knowledge graph for the in-app viewer.
+
+    Reads the on-disk GraphML so the UI can open the graph without waiting on
+    an in-flight /index. When the graph is larger than ``limit``, keeps the
+    highest-degree nodes and edges among them (Gephi-style overview).
+    """
+    if not GRAPHML_PATH.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="No graph yet. Run Build knowledge graph first.",
+        )
+
+    try:
+        import networkx as nx
+
+        graph = nx.read_graphml(GRAPHML_PATH)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("failed to read graphml")
+        raise HTTPException(status_code=500, detail=f"failed to read graph: {exc}") from exc
+
+    total_nodes = graph.number_of_nodes()
+    total_links = graph.number_of_edges()
+    degrees = dict(graph.degree())
+
+    if total_nodes > limit:
+        keep = {
+            node
+            for node, _ in sorted(degrees.items(), key=lambda item: item[1], reverse=True)[:limit]
+        }
+        graph = graph.subgraph(keep).copy()
+        degrees = dict(graph.degree())
+        truncated = True
+    else:
+        truncated = False
+
+    nodes = [
+        GraphNode(
+            id=str(node_id),
+            label=str(attrs.get("entity_id") or node_id),
+            entity_type=str(attrs.get("entity_type") or "UNKNOWN"),
+            description=str(attrs.get("description") or ""),
+            degree=int(degrees.get(node_id, 0)),
+        )
+        for node_id, attrs in graph.nodes(data=True)
+    ]
+    links = [
+        GraphLink(
+            source=str(source),
+            target=str(target),
+            weight=float(attrs.get("weight") or 1.0),
+            description=str(attrs.get("description") or ""),
+            keywords=str(attrs.get("keywords") or ""),
+        )
+        for source, target, attrs in graph.edges(data=True)
+    ]
+
+    return GraphResponse(
+        nodes=nodes,
+        links=links,
+        total_nodes=total_nodes,
+        total_links=total_links,
+        truncated=truncated,
+        path=str(GRAPHML_PATH),
+    )
+
+
+@app.get("/compare")
+async def get_compare() -> dict:
+    """Serve the saved LightRAG mode-comparison run for the Compare dashboard.
+
+    Produced offline by querying the same prompt across naive/local/global/hybrid
+    and writing ``workspace/mode_comparison.json``. Mirrors the Rag-eval-engine
+    Compare page data shape at a high level (pipelines + latency), without Ragas.
+    """
+    if not COMPARE_PATH.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No comparison yet. Run the four-mode query script or place "
+                "workspace/mode_comparison.json on disk."
+            ),
+        )
+    try:
+        payload = json.loads(COMPARE_PATH.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"failed to read compare file: {exc}") from exc
+
+    results = payload.get("results") or []
+    pipelines = []
+    for row in results:
+        mode = row.get("mode") or "unknown"
+        ok = bool(row.get("ok"))
+        latency = row.get("latency_seconds")
+        if latency is None and ok is False:
+            latency = row.get("wall_seconds")
+        pipelines.append(
+            {
+                "pipeline": mode,
+                "ok": ok,
+                "avg_latency_ms": round(float(latency) * 1000, 1) if latency is not None else None,
+                "latency_seconds": latency,
+                "chars": row.get("chars"),
+                "error": row.get("error"),
+                "response": row.get("response") or "",
+                "note": row.get("note"),
+            }
+        )
+
+    ok_count = sum(1 for p in pipelines if p["ok"])
+    fastest = None
+    for p in pipelines:
+        if not p["ok"] or p["latency_seconds"] is None:
+            continue
+        if fastest is None or p["latency_seconds"] < fastest["latency_seconds"]:
+            fastest = p
+
+    return {
+        "prompt": payload.get("prompt") or "",
+        "num_questions": 1,
+        "num_pipelines": len(pipelines),
+        "num_ok": ok_count,
+        "fastest": fastest["pipeline"] if fastest else None,
+        "fastest_latency_seconds": fastest["latency_seconds"] if fastest else None,
+        "pipelines": pipelines,
+        "paper_judge": payload.get("paper_judge"),
+        "path": str(COMPARE_PATH),
+    }

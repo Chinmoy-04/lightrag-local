@@ -1,4 +1,4 @@
-import { AlertTriangle, CircleCheck, Database, Loader2 } from 'lucide-react'
+import { AlertTriangle, CircleCheck, Database, Loader2, Network, Scale } from 'lucide-react'
 import ModeSelector from './ModeSelector'
 import StatusDot from './StatusDot'
 import SwitchButton from './kokonutui/switch-button'
@@ -20,10 +20,15 @@ export default function Sidebar({
   indexResult,
   indexError,
   onIndex,
+  onOpenGraph,
+  graphOpen,
+  onOpenCompare,
+  compareOpen,
 }) {
   const ready = health?.status === 'ok'
   const statusVariant = healthError ? 'error' : ready ? 'ok' : 'warn'
   const statusLabel = healthError ? 'Backend unreachable' : ready ? 'Ready' : 'Initializing'
+  const modesDisabled = isIndexing || graphOpen || compareOpen
 
   return (
     <aside className="flex w-full shrink-0 flex-col gap-6 border-b border-sidebar-border bg-sidebar p-5 md:h-screen md:w-80 md:border-b-0 md:border-r md:overflow-y-auto">
@@ -72,9 +77,9 @@ export default function Sidebar({
       </div>
 
       {/* Mode selector */}
-      <ModeSelector value={mode} onChange={onModeChange} disabled={isIndexing} />
+      <ModeSelector value={mode} onChange={onModeChange} disabled={modesDisabled} />
 
-      {/* Index control */}
+      {/* Index + explore */}
       <div>
         <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
           Knowledge graph
@@ -90,10 +95,35 @@ export default function Sidebar({
           {isIndexing ? 'Building graph…' : 'Build knowledge graph'}
         </Button>
 
+        <Button
+          type="button"
+          variant={graphOpen ? 'secondary' : 'outline'}
+          onClick={onOpenGraph}
+          disabled={!ready}
+          size="lg"
+          className="mt-2 w-full gap-2"
+        >
+          <Network className="h-4 w-4" />
+          {graphOpen ? 'Viewing graph' : 'Open graph viewer'}
+        </Button>
+
+        <Button
+          type="button"
+          variant={compareOpen ? 'secondary' : 'outline'}
+          onClick={onOpenCompare}
+          disabled={!ready}
+          size="lg"
+          className="mt-2 w-full gap-2"
+        >
+          <Scale className="h-4 w-4" />
+          {compareOpen ? 'Viewing compare' : 'Compare modes'}
+        </Button>
+
         {isIndexing && (
           <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
             Entity extraction runs one chunk at a time on local hardware — this can take
             several hours for the full corpus. Progress is in the backend terminal log.
+            Don&apos;t click Build again while a run is in progress.
           </p>
         )}
 
